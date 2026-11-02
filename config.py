@@ -47,6 +47,9 @@ class AreaConfig:
 GAROUTE_AREA = AreaConfig(north=60.025, south=59.995, east=30.415, west=30.355)
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api"
 
+# Q02-C RESOLVED / VERIFY: рабочая таблица до сквозной проверки модели.
+TRAFFIC_SPEED_FACTORS = {level: (11 - level) / 10 for level in range(1, 11)}
+
 
 @dataclass(frozen=True, slots=True)
 class PenaltyDefinition:
