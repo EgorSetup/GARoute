@@ -1,6 +1,43 @@
 """Общие структуры расчёта, не зависящие от интерфейса."""
 
 from dataclasses import dataclass
+from typing import Hashable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from networkx import MultiDiGraph
+    from data.restrictions import TurnRules
+
+
+EdgeId = tuple[Hashable, Hashable, Hashable]
+
+
+@dataclass(frozen=True, slots=True)
+class Route:
+    """Хромосома: упорядоченные направленные рёбра с полными ключами."""
+
+    edges: tuple[EdgeId, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RouteContext:
+    """Неизменяемые для проверки условия одного поиска."""
+
+    graph: "MultiDiGraph"
+    start: Hashable
+    end: Hashable
+    turn_rules: "TurnRules"
+    closed_edges: frozenset[EdgeId] = frozenset()
+
+
+@dataclass(frozen=True, slots=True)
+class RouteValidationReport:
+    """Коды всех обнаруженных жёстких нарушений маршрута."""
+
+    codes: tuple[str, ...] = ()
+
+    @property
+    def valid(self) -> bool:
+        return not self.codes
 
 
 @dataclass(frozen=True, slots=True)
