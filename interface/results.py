@@ -2,6 +2,7 @@
 
 from nicegui import ui
 
+from algorithm.genetic.initialization import PopulationResult
 from interface.controls import UIState
 from visualization.charts import render_empty_charts
 
@@ -9,6 +10,18 @@ from visualization.charts import render_empty_charts
 def _disabled_playback_button(label: str, icon: str) -> None:
     button = ui.button(label, icon=icon).props("outline dense").disable()
     button.tooltip("История поколений пока отсутствует")
+
+
+def population_status_text(result: PopulationResult) -> str:
+    """Объяснить P0 и отказ генератора без выдачи её за эволюцию."""
+
+    reasons = ", ".join(f"{reason}: {count}" for reason, count in result.rejections[:4])
+    suffix = f" Причины отказов: {reasons}." if reasons else ""
+    if result.error is not None:
+        return (f"P0 не сформирована: {result.error}; принято {result.accepted_count}, "
+                f"попыток {result.attempts}.{suffix}")
+    return (f"P0: {len(result.population)} маршрутов, попыток {result.attempts}. "
+            f"Это проверка генератора, не эволюция.{suffix}")
 
 
 def build_playback_controls(state: UIState) -> None:

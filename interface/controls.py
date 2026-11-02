@@ -28,6 +28,8 @@ class UIState:
     turn_rules: TurnRules = field(default_factory=TurnRules)
     endpoint_a: object | None = None
     endpoint_b: object | None = None
+    initial_population: object | None = None
+    clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
     demo_mode: bool = False
@@ -161,7 +163,7 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
         else:
             apply_setting_change(state, change)
     elif change.key == "preset" or change.candidate == state.config or not (
-        state.run_results or state.generation_history or state.chart_data
+        state.run_results or state.generation_history or state.chart_data or state.initial_population
     ):
         apply_setting_change(state, change)
     else:
@@ -217,6 +219,9 @@ def confirm_change(state: UIState) -> UIState:
     state.selected_run_id = None
     state.highlighted_route_ids.clear()
     state.playback = PlaybackState()
+    state.initial_population = None
+    if state.clear_population_layers is not None:
+        state.clear_population_layers()
     cancel_change(state)
     return state
 
@@ -551,20 +556,20 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
         add_number("max_waypoints", "Максимум промежуточных вершин",
                    ga.max_waypoints, minimum=1)
 
-    with ui.expansion("Остановка и открытые параметры", value=True).classes("w-full"):
+    with ui.expansion("Остановка и параметры поиска", value=True).classes("w-full"):
         ui.label("Стагнация означает отсутствие улучшения, а не найденный оптимум.").classes(
             "panel-copy"
         )
         ui.switch("Останавливать при стагнации").disable().tooltip(
-            "Окно поколений ещё не согласовано (Q06)"
+            "Переключатель заработает после подключения полного цикла поколений"
         )
-        ui.number("Окно стагнации (Q06)", value=None).props(
+        ui.number("Окно стагнации (Q06 VERIFY)", value=ga.stagnation_window).props(
             "outlined dense disable"
         ).classes("setting-field")
-        ui.number("Сила случайных весов (Q06)", value=None).props(
+        ui.number("Сила случайных весов (Q06 VERIFY)", value=ga.random_weight_strength).props(
             "outlined dense disable"
         ).classes("setting-field")
-        ui.label("Эти значения не подставляются автоматически.").classes("panel-copy")
+        ui.label("Рабочие значения исходного чата: 10 поколений и множитель 0,5–2; проверка продолжается.").classes("panel-copy")
 
     def reset() -> None:
         pending = PendingChange("ga_reset", None, replace(state.config, ga=GAConfig()))

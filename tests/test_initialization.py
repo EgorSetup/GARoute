@@ -11,6 +11,7 @@ from algorithm.genetic.initialization import (
     generate_candidate,
     generate_initial_population,
     minimum_valid_length,
+    production_weight_strategy,
     route_signature,
 )
 from algorithm.genetic.validation import validate_route
@@ -132,3 +133,18 @@ def test_no_auto_relaxation(route_context: RouteContext) -> None:
     too_long = generate_initial_population(route_context, short_only, FixedWaypointRng((4,)), by_length)
     assert too_long.error == "attempts_exhausted"
     assert dict(too_long.rejections) == {"length_limit": 2}
+
+
+def test_production_weights_and_seed(route_context: RouteContext) -> None:
+    strategy = production_weight_strategy(1.0)
+    weights_a = [strategy((1, 2, 0), {"length": 100}, Random(seed)) for seed in (1, 2, 3)]
+    weights_b = [strategy((1, 2, 0), {"length": 100}, Random(seed)) for seed in (1, 2, 3)]
+    assert weights_a == weights_b
+    assert all(50 <= weight <= 200 for weight in weights_a)
+    with pytest.raises(ValueError):
+        production_weight_strategy(0)
+    config = replace(GAConfig(), population_size=5)
+    first = generate_initial_population(route_context, config, Random(17), strategy)
+    second = generate_initial_population(route_context, config, Random(17), strategy)
+    assert first == second
+    assert first.error is None

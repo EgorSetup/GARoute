@@ -3,6 +3,8 @@
 import asyncio
 from dataclasses import dataclass
 from math import isfinite
+from random import Random
+from typing import Sequence
 
 import networkx as nx
 from pyproj import Geod
@@ -12,6 +14,8 @@ from nicegui.elements.input import Input
 from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
+from algorithm.genetic.initialization import generate_initial_population, production_weight_strategy
+from algorithm.models import Route, RouteContext
 from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
@@ -19,6 +23,7 @@ from data.road_graph import NormalizedRoadData, build_road_data
 from interface.controls import (
     UIState, cancel_change, confirm_change, request_condition_change, select_endpoint,
 )
+from interface.results import population_status_text
 
 
 MAP_MODES = ("view", "A", "B", "traffic")
@@ -116,6 +121,37 @@ def _road_geojson(roads: NormalizedRoadData, graph: nx.MultiDiGraph, accessible:
     return {"type": "FeatureCollection", "features": features}
 
 
+def route_geometry(route: Route, roads: NormalizedRoadData) -> list[list[float]]:
+    """Собрать полилинию особи по исходной направленной геометрии рёбер."""
+
+    coordinates: list[list[float]] = []
+    for edge_id in route.edges:
+        edge = roads.edges[edge_id]
+        points = [[lon, lat] for lon, lat in edge.geometry_lonlat]
+        coordinates.extend(points if not coordinates else points[1:])
+    return coordinates
+
+
+def render_population(map_element: Leaflet, population: Sequence[Route],
+                      roads: NormalizedRoadData, existing_layers: Sequence[object] = ()) -> list[object]:
+    """Заменить, а не накопить, линии P0 по направленным геометриям."""
+
+    for layer in existing_layers:
+        map_element.remove_layer(layer)
+    palette = ("#d35c23", "#8b5bb1", "#c54875", "#499f5a", "#d1a02c")
+    layers: list[object] = []
+    for index, route in enumerate(population):
+        feature = {"type": "Feature", "geometry": {
+            "type": "LineString", "coordinates": route_geometry(route, roads),
+        }}
+        layer = map_element.generic_layer(name="geoJSON", args=[feature, {
+            "style": {"color": palette[index % len(palette)], "weight": 5,
+                      "opacity": 0.75, "interactive": False},
+        }])
+        layers.append(layer)
+    return layers
+
+
 def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = None) -> MapHandle:
     """Показать область, реальные дороги и привязанные к графу точки A/B."""
 
@@ -124,6 +160,18 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                   (GAROUTE_AREA.east + GAROUTE_AREA.west) / 2)
         map_element = ui.leaflet(center=center, zoom=13).classes("map-canvas")
         markers: dict[str, object] = {}
+        population_layers: list[object] = []
+
+        def clear_population() -> None:
+            for layer in population_layers:
+                map_element.remove_layer(layer)
+            population_layers.clear()
+            state.initial_population = None
+            if not state.demo_mode:
+                population_label.set_text("P0 ещё не сформирована")
+
+        if not state.demo_mode:
+            state.clear_population_layers = clear_population
 
         def show_pair_status() -> None:
             if state.endpoint_a is not None and state.endpoint_b is not None:
@@ -146,6 +194,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 marker.move(lat, lon)
             if endpoint_inputs is not None:
                 (endpoint_inputs[0] if endpoint == "A" else endpoint_inputs[1]).set_value(str(node))
+            if state.endpoint_a is not None and state.endpoint_b is not None:
+                p0_button.enable()
 
         if not state.demo_mode:
             with ui.dialog().props("persistent") as endpoint_dialog, ui.card():
@@ -210,6 +260,40 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     button.set_visibility(False)
 
                 button = ui.button("Загрузить дороги", on_click=load_area).props("outline dense")
+                population_label = ui.label("P0 ещё не сформирована").classes("map-message-copy")
+
+                async def show_initial_population() -> None:
+                    if (state.routing_graph is None or state.normalized_roads is None
+                            or state.endpoint_a is None or state.endpoint_b is None):
+                        return
+                    p0_button.disable()
+                    population_label.set_text("Формирую P0…")
+                    graph = state.routing_graph
+                    roads = state.normalized_roads
+                    start, end = state.endpoint_a, state.endpoint_b
+                    config = state.config.ga
+                    context = RouteContext(graph, start, end, state.turn_rules)
+                    try:
+                        result = await asyncio.to_thread(
+                            generate_initial_population, context, config, Random(config.seed),
+                            production_weight_strategy(config.random_weight_strength),
+                        )
+                    except (ValueError, OverflowError) as error:
+                        population_label.set_text(f"P0 не сформирована: {error}")
+                        p0_button.enable()
+                        return
+                    if (state.endpoint_a, state.endpoint_b, state.config.ga) != (start, end, config):
+                        p0_button.enable()
+                        return
+                    clear_population()
+                    state.initial_population = result
+                    if result.error is None:
+                        population_layers.extend(render_population(map_element, result.population, roads))
+                    population_label.set_text(population_status_text(result))
+                    p0_button.enable()
+
+                p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")
+                p0_button.disable()
 
         if state.demo_mode:
             segment = map_element.generic_layer(

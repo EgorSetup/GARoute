@@ -60,8 +60,8 @@ def test_unresolved_not_defaulted() -> None:
     config = default_config()
     report = validate_config(config)
 
-    assert config.ga.random_weight_strength is None
-    assert config.ga.stagnation_window is None
+    assert config.ga.random_weight_strength == 1.0  # Q06-C VERIFY
+    assert config.ga.stagnation_window == 10
     assert config.fitness.preset is None
     assert config.fitness.weights is None
     assert config.fitness.penalties is None

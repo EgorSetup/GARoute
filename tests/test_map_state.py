@@ -33,14 +33,19 @@ def test_endpoint_cancel() -> None:
     request_condition_change(state, select_endpoint(state, "A", 1))
     request_condition_change(state, select_endpoint(state, "B", 3))
     state.run_results.append(object())
+    state.initial_population = object()
+    cleared = []
+    state.clear_population_layers = lambda: cleared.append(True)
     change = select_endpoint(state, "B", 4)
     request_condition_change(state, change)
     assert state.pending_change is change and state.endpoint_b == 3
     cancel_change(state)
     assert state.endpoint_b == 3 and len(state.run_results) == 1
+    assert state.initial_population is not None and not cleared
     request_condition_change(state, select_endpoint(state, "B", 4))
     confirm_change(state)
     assert state.endpoint_b == 4 and not state.run_results
+    assert state.initial_population is None and cleared == [True]
 
 
 def test_same_or_unreachable_pair_is_rejected() -> None:

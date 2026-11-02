@@ -14,6 +14,25 @@ def report(context: RouteContext, *edges: tuple[int, int, int]):
     return validate_route(Route(edges), context)
 
 
+def test_complete_search_keeps_nondominated_visited_sets() -> None:
+    """Дешёвый путь к состоянию может уже посетить нужную позже вершину."""
+
+    import networkx as nx
+
+    graph = nx.MultiDiGraph()
+    for u, v, length in (("s", "x", 1), ("x", "a", 1), ("s", "b", 2),
+                         ("b", "a", 2), ("a", "y", 1), ("y", "x", 1),
+                         ("x", "t", 1)):
+        graph.add_edge(u, v, key=0, length=length, car_access=True)
+    rules = TurnRules(frozenset({(("s", "x", 0), ("x", "t", 0))}))
+    context = RouteContext(graph, "s", "t", rules)
+    by_length = lambda edge, attrs: attrs["length"]
+    route = find_connector("s", "t", context, Random(1), weight=by_length, complete=True)
+    assert route == Route((("s", "b", 0), ("b", "a", 0), ("a", "y", 0),
+                           ("y", "x", 0), ("x", "t", 0)))
+    assert check_reachability("s", "t", context).reachable
+
+
 def test_valid_route(route_context: RouteContext) -> None:
     assert report(route_context, (1, 2, 0), (2, 5, 0), (5, 6, 0)).valid
     assert report(route_context, (1, 2, 1), (2, 5, 0), (5, 6, 0)).valid

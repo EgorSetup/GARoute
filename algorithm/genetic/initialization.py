@@ -14,6 +14,27 @@ from data.road_graph import find_connector
 WeightStrategy = Callable[[EdgeId, Mapping[str, object], Random], float]
 
 
+def production_weight_strategy(strength: float) -> WeightStrategy:
+    """Q06-C VERIFY: положительный множитель 2^U(-s,s) от длины ребра."""
+
+    if type(strength) not in (int, float) or not isfinite(strength) or strength <= 0:
+        raise ValueError("random weight strength must be positive and finite")
+
+    def weight(edge: EdgeId, attributes: Mapping[str, object], rng: Random) -> float:
+        try:
+            length = float(attributes["length"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("edge length must be known in metres") from error
+        if not isfinite(length) or length <= 0:
+            raise ValueError("edge length must be positive and finite")
+        result = length * 2 ** rng.uniform(-strength, strength)
+        if not isfinite(result) or result <= 0:
+            raise ValueError("edge weight must be positive and finite")
+        return result
+
+    return weight
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateOutcome:
     """Результат одной конечной попытки без подмены неудачи эталоном."""
@@ -57,7 +78,7 @@ def minimum_valid_length(context: RouteContext) -> float | None:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("edge length must be known in metres") from error
 
-    route = find_connector(context.start, context.end, context, Random(0), weight=by_length)
+    route = find_connector(context.start, context.end, context, Random(0), weight=by_length, complete=True)
     if route is None:
         return None
     return fsum(float(context.graph[u][v][key]["length"]) for u, v, key in route.edges)
@@ -103,10 +124,14 @@ def generate_candidate(
     targets = (context.start, *waypoints, context.end)
     edges: list[EdgeId] = []
 
-    def weight(edge: EdgeId, attributes: Mapping[str, object]) -> float:
-        return weight_strategy(edge, attributes, rng)
-
     for start, end in zip(targets, targets[1:]):
+        search_weights: dict[EdgeId, float] = {}
+
+        def weight(edge: EdgeId, attributes: Mapping[str, object]) -> float:
+            if edge not in search_weights:
+                search_weights[edge] = weight_strategy(edge, attributes, rng)
+            return search_weights[edge]
+
         connector = find_connector(
             start,
             end,

@@ -33,8 +33,8 @@ def test_reset_known_defaults() -> None:
     reset_ga_defaults(state)
 
     assert state.config.ga.elite_count == 2
-    assert state.config.ga.random_weight_strength is None
-    assert state.config.ga.stagnation_window is None
+    assert state.config.ga.random_weight_strength == 1.0
+    assert state.config.ga.stagnation_window == 10
 
 
 def test_mutation_choice() -> None:

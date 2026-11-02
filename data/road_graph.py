@@ -174,6 +174,7 @@ def _search(
     incoming: EdgeId | None,
     outgoing: EdgeId | None,
     weight: EdgeWeight | None,
+    complete: bool,
 ) -> Route | None:
     if start not in context.graph or end not in context.graph or start == end:
         return None
@@ -184,8 +185,38 @@ def _search(
 
     order = count()
     queue = [(0.0, next(order), start, incoming, (), frozenset({start}))]
+    labels: dict[tuple[Hashable, EdgeId | None], list[tuple[float, frozenset[Hashable]]]] = {
+        (start, incoming): [(0.0, frozenset({start}))],
+    }
+    best_cost: dict[tuple[Hashable, EdgeId | None], float] = {(start, incoming): 0.0}
+
+    def enqueue(cost: float, neighbor: Hashable, edge_id: EdgeId,
+                path: tuple[EdgeId, ...], visited: frozenset[Hashable]) -> None:
+        """Отсекать только путь, доминируемый по стоимости и посещённым вершинам."""
+
+        state = (neighbor, edge_id)
+        if not complete:
+            if cost >= best_cost.get(state, float("inf")):
+                return
+            best_cost[state] = cost
+            heappush(queue, (cost, next(order), neighbor, edge_id, path, visited))
+            return
+        previous_labels = labels.setdefault(state, [])
+        if any(old_cost <= cost and old_visited <= visited for old_cost, old_visited in previous_labels):
+            return
+        previous_labels[:] = [
+            (old_cost, old_visited) for old_cost, old_visited in previous_labels
+            if not (cost <= old_cost and visited <= old_visited)
+        ]
+        previous_labels.append((cost, visited))
+        heappush(queue, (cost, next(order), neighbor, edge_id, path, visited))
+
     while queue:
         cost, _, node, previous, path, visited = heappop(queue)
+        if complete and (cost, visited) not in labels.get((node, previous), ()):
+            continue
+        if not complete and cost > best_cost.get((node, previous), float("inf")):
+            continue
         if node == end:
             return Route(path)
         edges = list(context.graph.out_edges(node, keys=True))
@@ -208,9 +239,9 @@ def _search(
                 raise ValueError("edge weight must be positive and finite")
             if neighbor == end:
                 if outgoing is None or is_turn_allowed(edge_id, outgoing, context.turn_rules):
-                    heappush(queue, (cost + edge_cost, next(order), neighbor, edge_id, path + (edge_id,), visited | {neighbor}))
+                    enqueue(cost + edge_cost, neighbor, edge_id, path + (edge_id,), visited | {neighbor})
                 continue
-            heappush(queue, (cost + edge_cost, next(order), neighbor, edge_id, path + (edge_id,), visited | {neighbor}))
+            enqueue(cost + edge_cost, neighbor, edge_id, path + (edge_id,), visited | {neighbor})
     return None
 
 
@@ -222,10 +253,15 @@ def find_connector(
     incoming: EdgeId | None = None,
     outgoing: EdgeId | None = None,
     weight: EdgeWeight | None = None,
+    complete: bool = False,
 ) -> Route | None:
-    """Найти один допустимый простой подмаршрут или явно вернуть None."""
+    """Искать простой подмаршрут; быстрый отказ не доказывает недостижимость.
 
-    return _search(start, end, context, rng, incoming, outgoing, weight)
+    complete=True сохраняет альтернативы с разными посещёнными вершинами
+    для точных эталонов и проверки достижимости.
+    """
+
+    return _search(start, end, context, rng, incoming, outgoing, weight, complete)
 
 
 def check_reachability(a: Hashable, b: Hashable, context: RouteContext) -> ReachabilityResult:
@@ -233,5 +269,5 @@ def check_reachability(a: Hashable, b: Hashable, context: RouteContext) -> Reach
 
     if a == b:
         return ReachabilityResult(False, "same_endpoints")
-    route = _search(a, b, context, None, None, None, None)
+    route = _search(a, b, context, None, None, None, None, True)
     return ReachabilityResult(route is not None, None if route is not None else "unreachable")

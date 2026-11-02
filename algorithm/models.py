@@ -123,8 +123,8 @@ class GAConfig:
     segment_length_m: float = 500.0
     mutation_method: str = "A"
     seed: int | None = None
-    random_weight_strength: float | None = None  # OPEN Q06-C
-    stagnation_window: int | None = None  # OPEN Q06-C
+    random_weight_strength: float | None = 1.0  # Q06-C VERIFY: 2^U(-s,s)
+    stagnation_window: int | None = 10  # Q06-C VERIFY
 
 
 @dataclass(frozen=True, slots=True)
