@@ -9,6 +9,7 @@ from nicegui.elements.number import Number
 
 from algorithm.models import AppConfig, GAConfig, ValidationReport
 from config import approved_penalty_defaults, default_config, penalty_catalog, validate_config
+from visualization.animation import PlaybackState
 
 
 @dataclass(slots=True)
@@ -25,6 +26,7 @@ class UIState:
     demo_segment_level: int = 1
     demo_map_clicks: int = 0
     demo_segment_clicks: int = 0
+    playback: PlaybackState = field(default_factory=PlaybackState)
 
 
 @dataclass(frozen=True, slots=True)

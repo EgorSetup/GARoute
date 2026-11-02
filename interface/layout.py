@@ -10,6 +10,7 @@ from interface.controls import (
     build_normalization_controls, build_penalty_controls,
 )
 from interface.map_view import MapHandle, create_map, set_map_mode
+from interface.results import build_results_panel
 
 
 @dataclass(slots=True)
@@ -77,6 +78,12 @@ STYLE = """
   .right-panel .q-expansion-item { border-bottom: 1px solid var(--line); }
   .empty-block { margin-top: 18px; padding: 18px; border: 1px dashed #b9cbd4;
     border-radius: 9px; background: #f7fafb; }
+  .results-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
+  .playback-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .playback-actions .q-btn { min-height: 30px; }
+  .chart-list { margin-top: 12px; }
+  .chart-placeholder { box-shadow: none; border: 1px dashed #b9cbd4;
+    background: #f7fafb; min-height: 92px; }
   @media (max-width: 1120px) {
     .workspace { grid-template-columns: 220px minmax(0, 1fr); height: auto; }
     .right-panel { grid-column: 1 / -1; min-height: 300px; }
@@ -161,12 +168,7 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
                 build_normalization_controls(state)
                 build_penalty_controls(state)
             with ui.tab_panel(results).classes("tab-content"):
-                ui.label("Результаты").classes("panel-heading")
-                with ui.element("div").classes("empty-block"):
-                    ui.label("Расчёты ещё не выполнены").classes("panel-heading")
-                    ui.label("После запуска здесь появятся маршруты и графики.").classes(
-                        "panel-copy"
-                    )
+                build_results_panel(state)
     return tabs, panels
 
 
