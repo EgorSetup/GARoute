@@ -27,6 +27,17 @@ class Individual:
 
 
 @dataclass(frozen=True, slots=True)
+class OperatorOutcome:
+    """Результат оператора с разделением попытки, изменения и отказов."""
+
+    route: Route
+    attempted: bool
+    changed: bool
+    rejected_count: int = 0
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RouteContext:
     """Неизменяемые для проверки условия одного поиска."""
 
