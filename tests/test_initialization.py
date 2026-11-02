@@ -9,7 +9,9 @@ from algorithm.genetic.initialization import (
     InitialLengthPolicy,
     check_initial_length,
     generate_candidate,
+    generate_initial_population,
     minimum_valid_length,
+    route_signature,
 )
 from algorithm.genetic.validation import validate_route
 from algorithm.models import GAConfig, Route, RouteContext
@@ -91,3 +93,42 @@ def test_initial_reference_invalid(route_context: RouteContext) -> None:
     assert not check_initial_length(5, InitialLengthPolicy(1e308, 3)).is_valid
     context = replace(route_context, closed_edges=frozenset(route_context.graph.edges(keys=True)))
     assert minimum_valid_length(context) is None
+
+
+def test_fixed_population_size(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=5, attempts_per_slot=100)
+    result = generate_initial_population(route_context, config, Random(11), by_length)
+    assert result.error is None
+    assert len(result.population) == result.accepted_count == 5
+    assert all(validate_route(route, route_context).valid for route in result.population)
+
+
+def test_duplicate_limit(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=3, max_copies=2, attempts_per_slot=3)
+    result = generate_initial_population(route_context, config, FixedWaypointRng((4,)), by_length)
+    assert result.error == "attempts_exhausted"
+    assert result.population == () and result.accepted_count == 2
+    assert result.attempts == 5
+    assert dict(result.rejections)["duplicate_limit"] == 3
+    assert route_signature(Route(((1, 2, 0),))) != route_signature(Route(((1, 2, 1),)))
+
+
+def test_attempt_limit(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=2, max_copies=1, attempts_per_slot=2)
+    result = generate_initial_population(route_context, config, FixedWaypointRng((4,)), by_length)
+    assert result.error == "attempts_exhausted"
+    assert result.attempts == 3
+
+
+def test_no_auto_relaxation(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=3, max_copies=1, attempts_per_slot=1)
+    result = generate_initial_population(route_context, config, FixedWaypointRng((4,)), by_length)
+    assert result.error == "attempts_exhausted"
+    assert result.population == () and result.accepted_count == 1
+    assert dict(result.rejections) == {"duplicate_limit": 1}
+    invalid = generate_initial_population(route_context, replace(config, population_size=0), Random(0), by_length)
+    assert invalid.error == "invalid_population_config"
+    short_only = replace(config, population_size=1, initial_length_factor=1, attempts_per_slot=2)
+    too_long = generate_initial_population(route_context, short_only, FixedWaypointRng((4,)), by_length)
+    assert too_long.error == "attempts_exhausted"
+    assert dict(too_long.rejections) == {"length_limit": 2}

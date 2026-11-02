@@ -1,6 +1,7 @@
 """Одна попытка построения особи через случайные промежуточные вершины."""
 
 from dataclasses import dataclass
+from collections import Counter
 from math import fsum, isfinite
 from random import Random
 from typing import Callable, Hashable, Mapping
@@ -28,6 +29,23 @@ class InitialLengthPolicy:
 
     minimum_length_m: float | None
     factor: float = 3.0
+
+
+@dataclass(frozen=True, slots=True)
+class PopulationResult:
+    """Только полная популяция; частичный прогресс доступен как диагностика."""
+
+    population: tuple[Route, ...]
+    accepted_count: int
+    attempts: int
+    rejections: tuple[tuple[str, int], ...]
+    error: str | None = None
+
+
+def route_signature(route: Route) -> tuple[EdgeId, ...]:
+    """Сравнить всю упорядоченную хромосому, включая ключи параллельных рёбер."""
+
+    return route.edges
 
 
 def minimum_valid_length(context: RouteContext) -> float | None:
@@ -106,3 +124,58 @@ def generate_candidate(
     if not report.valid:
         return CandidateOutcome(None, "invalid_route:" + ",".join(report.codes), waypoints)
     return CandidateOutcome(candidate, None, waypoints)
+
+
+def generate_initial_population(
+    context: RouteContext,
+    config: GAConfig,
+    rng: Random,
+    weight_strategy: WeightStrategy,
+) -> PopulationResult:
+    """Заполнить N мест с конечным числом попыток на каждое место."""
+
+    if any(type(value) is not int or value < 1 for value in (
+        config.population_size, config.max_copies, config.attempts_per_slot,
+    )):
+        return PopulationResult((), 0, 0, (), "invalid_population_config")
+    try:
+        minimum = minimum_valid_length(context)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        return PopulationResult((), 0, 0, (), "invalid_reference")
+    if minimum is None:
+        return PopulationResult((), 0, 0, (), "reference_unavailable")
+    policy = InitialLengthPolicy(minimum, config.initial_length_factor)
+    if not check_initial_length(minimum, policy).is_valid:
+        return PopulationResult((), 0, 0, (), "invalid_reference")
+
+    accepted: list[Route] = []
+    copies: Counter[tuple[EdgeId, ...]] = Counter()
+    rejections: Counter[str] = Counter()
+    attempts = 0
+    for _ in range(config.population_size):
+        for _ in range(config.attempts_per_slot):
+            attempts += 1
+            candidate = generate_candidate(context, config, rng, weight_strategy)
+            if candidate.route is None:
+                rejections[candidate.reason or "candidate_unavailable"] += 1
+                continue
+            route = candidate.route
+            try:
+                length = fsum(float(context.graph[u][v][key]["length"]) for u, v, key in route.edges)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                rejections["invalid_route_length"] += 1
+                continue
+            length_report = check_initial_length(length, policy)
+            if not length_report.is_valid:
+                rejections["length_limit"] += 1
+                continue
+            signature = route_signature(route)
+            if copies[signature] >= config.max_copies:
+                rejections["duplicate_limit"] += 1
+                continue
+            accepted.append(route)
+            copies[signature] += 1
+            break
+        else:
+            return PopulationResult((), len(accepted), attempts, tuple(sorted(rejections.items())), "attempts_exhausted")
+    return PopulationResult(tuple(accepted), len(accepted), attempts, tuple(sorted(rejections.items())))
