@@ -1,11 +1,14 @@
 """Карта Leaflet и проверяемые режимы её событий."""
 
+import asyncio
 from dataclasses import dataclass
 
 from nicegui import ui
 from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
+from config import GAROUTE_AREA
+from data.osm_loader import OSMLoadError, load_road_network
 from interface.controls import UIState
 
 
@@ -55,12 +58,20 @@ class MapHandle:
     status_label: Label
 
 
+def show_load_error(handle: MapHandle, error: OSMLoadError) -> None:
+    """Показать тип и причину сбоя загрузки без подмены его пустой картой."""
+
+    prefix = {"network": "Ошибка сети", "format": "Ошибка данных OSM", "empty": "Пустая область"}
+    handle.status_label.set_text(f"{prefix.get(error.kind, 'Ошибка загрузки')}: {error.detail}")
+
+
 def create_map(state: UIState) -> MapHandle:
-    """Показать карту без маршрутов и без выдуманной целевой области."""
+    """Показать утверждённую область; дороги добавит этап T02.06."""
 
     with ui.element("div").classes("map-stage"):
-        # Центр мира временный: точная область карты остаётся OPEN Q01.
-        map_element = ui.leaflet(center=(0.0, 0.0), zoom=2).classes("map-canvas")
+        center = ((GAROUTE_AREA.north + GAROUTE_AREA.south) / 2,
+                  (GAROUTE_AREA.east + GAROUTE_AREA.west) / 2)
+        map_element = ui.leaflet(center=center, zoom=13).classes("map-canvas")
         with ui.element("div").classes("map-message"):
             status = "ДЕМО: проверка событий, не дорожный граф" if state.demo_mode else (
                 "Граф готов" if state.graph_loaded else "Граф ещё не загружен"
@@ -71,9 +82,26 @@ def create_map(state: UIState) -> MapHandle:
                     "map-message-copy"
                 )
             elif not state.graph_loaded:
-                ui.label("Дорожная сеть появится после выбора области.").classes(
+                ui.label("Дорожная сеть появится после загрузки согласованной области.").classes(
                     "map-message-copy"
                 )
+                async def load_area() -> None:
+                    button.disable()
+                    status_label.set_text("Загружаю автомобильную сеть OSM…")
+                    try:
+                        road_data = await asyncio.to_thread(load_road_network, GAROUTE_AREA)
+                    except OSMLoadError as error:
+                        show_load_error(MapHandle(map_element, status_label), error)
+                        button.enable()
+                        return
+                    state.road_data = road_data
+                    state.graph_loaded = True
+                    status_label.set_text(
+                        f"Граф загружен: {road_data.metadata['nodes']} узлов, "
+                        f"{road_data.metadata['edges']} рёбер. Отображение дорог — следующий этап."
+                    )
+
+                button = ui.button("Загрузить дороги", on_click=load_area).props("outline dense")
 
         if state.demo_mode:
             segment = map_element.generic_layer(

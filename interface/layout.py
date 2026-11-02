@@ -65,6 +65,7 @@ STYLE = """
     box-shadow: 0 5px 24px rgba(18,49,71,.09); }
   .map-message-title { font: 700 15px/1.3 system-ui, sans-serif; }
   .map-message-copy { color: var(--muted); font: 400 12px/1.4 system-ui, sans-serif; }
+  .map-message .q-btn { pointer-events: auto; margin-top: 9px; }
   .map-demo-status { position: absolute; z-index: 500; bottom: 25px; left: 18px;
     max-width: 80%; padding: 8px 10px; background: white; border: 1px solid #ce3f35;
     border-radius: 6px; font: 600 12px/1.4 system-ui, sans-serif; pointer-events: none; }

@@ -2,8 +2,50 @@
 
 from dataclasses import dataclass
 from math import isclose, isfinite
+from pyproj import Geod
 
 from algorithm.models import AppConfig, FitnessConfig, GAConfig, ValidationReport
+
+
+@dataclass(frozen=True, slots=True)
+class AreaConfig:
+    """Утверждённая прямоугольная область WGS84 и явный шаг расширения."""
+
+    north: float
+    south: float
+    east: float
+    west: float
+    expansion_step_m: float = 1000.0
+    network_type: str = "drive"
+
+    def __post_init__(self) -> None:
+        values = (self.north, self.south, self.east, self.west, self.expansion_step_m)
+        if any(type(value) not in (int, float) or not isfinite(value) for value in values):
+            raise ValueError("area coordinates and expansion must be finite numbers")
+        if not (-90 <= self.south < self.north <= 90 and -180 <= self.west < self.east <= 180):
+            raise ValueError("invalid WGS84 area bounds")
+        if self.expansion_step_m <= 0 or self.network_type != "drive":
+            raise ValueError("area requires positive expansion and drive network")
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float]:
+        """Формат OSMnx: west, south, east, north."""
+
+        return (self.west, self.south, self.east, self.north)
+
+    def expanded(self) -> "AreaConfig":
+        """Явно добавить около 1 км с каждой стороны; при загрузке не вызывается."""
+
+        geod = Geod(ellps="WGS84")
+        west, _, _ = geod.fwd(self.west, self.north, 270, self.expansion_step_m)
+        east, _, _ = geod.fwd(self.east, self.north, 90, self.expansion_step_m)
+        _, north, _ = geod.fwd(self.west, self.north, 0, self.expansion_step_m)
+        _, south, _ = geod.fwd(self.west, self.south, 180, self.expansion_step_m)
+        return AreaConfig(north, south, east, west, self.expansion_step_m, self.network_type)
+
+
+GAROUTE_AREA = AreaConfig(north=60.025, south=59.995, east=30.415, west=30.355)
+OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api"
 
 
 @dataclass(frozen=True, slots=True)

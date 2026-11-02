@@ -9,6 +9,7 @@ from nicegui.elements.number import Number
 
 from algorithm.models import AppConfig, GAConfig, ValidationReport
 from config import approved_penalty_defaults, default_config, penalty_catalog, validate_config
+from data.osm_loader import RoadData
 from visualization.animation import PlaybackState
 
 
@@ -18,6 +19,7 @@ class UIState:
 
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
+    road_data: RoadData | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
     demo_mode: bool = False
