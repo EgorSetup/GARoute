@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from nicegui import ui
 from nicegui.elements.tabs import TabPanels, Tabs
+from nicegui.elements.input import Input
 
 from interface.controls import (
     UIState, PendingChange, build_fitness_controls, build_ga_controls,
@@ -117,25 +118,31 @@ def _build_header() -> None:
             ui.label("GARoute").classes("brand-name")
             ui.label("Генетический поиск маршрута").classes("brand-subtitle")
         with ui.element("div").classes("top-actions"):
-            _disabled_button("Рассчитать", "Сначала нужен дорожный граф и точки A/B", "route")
+            _disabled_button("Рассчитать", "Расчёт станет доступен после подключения модели оценки и эволюции", "route")
             _disabled_button("Воспроизвести", "Расчёты ещё не выполнены", "play_arrow")
             _disabled_button("Шаг назад", "Расчёты ещё не выполнены", "skip_previous")
             _disabled_button("Шаг вперёд", "Расчёты ещё не выполнены", "skip_next")
 
 
-def _build_left_panel(state: UIState) -> None:
+def _build_left_panel(state: UIState) -> tuple[Input, Input]:
     with ui.element("aside").classes("side-panel left-panel"):
         with ui.element("section").classes("panel-section"):
             ui.label("Маршрут").classes("panel-heading")
             ui.label("Выберите начало и конец после загрузки графа.").classes("panel-copy")
-            ui.input("Точка A").props("outlined dense disable")
-            ui.input("Точка B").props("outlined dense disable")
+            endpoint_a = ui.input("Точка A").props("outlined dense disable")
+            endpoint_b = ui.input("Точка B").props("outlined dense disable")
+            if not state.demo_mode:
+                ui.select(
+                    {"view": "Просмотр", "A": "Выбрать A", "B": "Выбрать B"},
+                    label="Режим карты", value="view",
+                    on_change=lambda e: set_map_mode(state, e.value),
+                ).props("outlined dense").classes("setting-field")
         with ui.element("section").classes("panel-section"):
             ui.label("Дорожные условия").classes("panel-heading")
-            ui.label("Пробки и перекрытия станут доступны после загрузки дорог.").classes(
+            ui.label("Пробки и перекрытия станут доступны после подключения дорожных сегментов.").classes(
                 "panel-copy"
             )
-            _disabled_button("Изменить пробку", "Граф ещё не загружен", "traffic")
+            _disabled_button("Изменить пробку", "Редактирование дорожных сегментов ещё не подключено", "traffic")
             _disabled_button("Сбросить изменения", "Изменений пока нет", "restart_alt")
         with ui.element("section").classes("panel-section"):
             ui.label("Легенда").classes("panel-heading")
@@ -156,6 +163,8 @@ def _build_left_panel(state: UIState) -> None:
                     label="Режим карты", value="view",
                     on_change=lambda e: change_mode(e.value),
                 ).props("outlined dense").classes("setting-field")
+
+    return endpoint_a, endpoint_b
 
 
 def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
@@ -221,7 +230,7 @@ def build_layout(state: UIState) -> ViewHandles:
     with ui.element("div").classes("app-shell"):
         _build_header()
         with ui.element("main").classes("workspace"):
-            _build_left_panel(state)
-            map_view = create_map(state)
+            endpoint_inputs = _build_left_panel(state)
+            map_view = create_map(state, endpoint_inputs=endpoint_inputs)
             tabs, panels = _build_right_panel(state)
     return ViewHandles(map_view=map_view, tabs=tabs, panels=panels)

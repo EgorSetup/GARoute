@@ -4,12 +4,15 @@ from dataclasses import dataclass, field, replace
 from math import isfinite
 from typing import Callable
 
+import networkx as nx
 from nicegui import ui
 from nicegui.elements.number import Number
 
-from algorithm.models import AppConfig, GAConfig, ValidationReport
+from algorithm.models import AppConfig, GAConfig, RouteContext, ValidationReport
 from config import approved_penalty_defaults, default_config, penalty_catalog, validate_config
 from data.osm_loader import RoadData
+from data.restrictions import TurnRules
+from data.road_graph import NormalizedRoadData, check_reachability
 from visualization.animation import PlaybackState
 
 
@@ -20,6 +23,11 @@ class UIState:
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
     road_data: RoadData | None = None
+    normalized_roads: NormalizedRoadData | None = None
+    routing_graph: nx.MultiDiGraph | None = None
+    turn_rules: TurnRules = field(default_factory=TurnRules)
+    endpoint_a: object | None = None
+    endpoint_b: object | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
     demo_mode: bool = False
@@ -116,6 +124,9 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
 
     if pending.candidate is None or pending.errors:
         return False
+    if pending.key in ("endpoint_a", "endpoint_b"):
+        setattr(state, pending.key, pending.value)
+        return True
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
         state.custom_weights = state.config.fitness.weights
@@ -142,6 +153,13 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
         return PendingChange(change.key, change.value, None, ("Есть незавершённое изменение",))
     if change.key == "playback_speed":
         state.playback.speed = change.value
+    elif change.key in ("endpoint_a", "endpoint_b"):
+        old = getattr(state, change.key)
+        if old != change.value and state.endpoint_a is not None and state.endpoint_b is not None:
+            state.pending_change = change
+            state.pending_base_config = state.config
+        else:
+            apply_setting_change(state, change)
     elif change.key == "preset" or change.candidate == state.config or not (
         state.run_results or state.generation_history or state.chart_data
     ):
@@ -150,6 +168,30 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
         state.pending_change = change
         state.pending_base_config = state.config
     return change
+
+
+def select_endpoint(state: UIState, endpoint: str, node: object) -> PendingChange:
+    """Предложить A/B после проверки узла и достижимости с запретами поворотов."""
+
+    if endpoint not in ("A", "B"):
+        return PendingChange("endpoint", node, None, ("Неизвестная точка маршрута",))
+    graph = state.routing_graph
+    if graph is None or node not in graph:
+        return PendingChange(f"endpoint_{endpoint.lower()}", node, None, ("Дорожный граф не готов",))
+    start = node if endpoint == "A" else state.endpoint_a
+    end = node if endpoint == "B" else state.endpoint_b
+    if start is not None and end is not None:
+        if start == end:
+            return PendingChange(f"endpoint_{endpoint.lower()}", node, None, ("A и B должны быть разными вершинами",))
+        accessible = nx.subgraph_view(
+            graph, filter_edge=lambda u, v, key: graph[u][v][key].get("car_access") is True,
+        )
+        if not nx.has_path(accessible, start, end):
+            return PendingChange(f"endpoint_{endpoint.lower()}", node, None, ("Между A и B нет направленного проезда",))
+        context = RouteContext(graph, start, end, state.turn_rules)
+        if not check_reachability(start, end, context).reachable:
+            return PendingChange(f"endpoint_{endpoint.lower()}", node, None, ("Проезд между A и B запрещён правилами поворотов",))
+    return PendingChange(f"endpoint_{endpoint.lower()}", node, state.config)
 
 
 def cancel_change(state: UIState) -> None:
