@@ -1,0 +1,6 @@
+# Проверено для Python 3.12 на Windows в T01.01.
+nicegui==3.18.0
+osmnx==2.1.1
+networkx==3.7
+plotly==7.1.0
+pytest==8.4.2
