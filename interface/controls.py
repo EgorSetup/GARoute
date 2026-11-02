@@ -501,6 +501,7 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
                    minimum=1)
         add_number("initial_length_factor", "Предел начальной длины, ×L_min",
                    ga.initial_length_factor, minimum=1, step=0.1)
+        ui.label("L_min — кратчайший допустимый путь при текущих условиях; он нужен только для ограничения P0 и не добавляется в популяцию.").classes("panel-copy")
         add_number("min_waypoints", "Минимум промежуточных вершин",
                    ga.min_waypoints, minimum=1)
         add_number("max_waypoints", "Максимум промежуточных вершин",

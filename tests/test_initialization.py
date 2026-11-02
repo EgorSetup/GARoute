@@ -5,7 +5,12 @@ from random import Random
 
 import pytest
 
-from algorithm.genetic.initialization import generate_candidate
+from algorithm.genetic.initialization import (
+    InitialLengthPolicy,
+    check_initial_length,
+    generate_candidate,
+    minimum_valid_length,
+)
 from algorithm.genetic.validation import validate_route
 from algorithm.models import GAConfig, Route, RouteContext
 
@@ -63,3 +68,26 @@ def test_invalid_weight_and_range(route_context: RouteContext) -> None:
         generate_candidate(route_context, GAConfig(), FixedWaypointRng((4,)), lambda edge, attrs, rng: 0)
     invalid = replace(GAConfig(), min_waypoints=0)
     assert generate_candidate(route_context, invalid, Random(0), by_length).reason == "invalid_waypoint_range"
+
+
+def test_initial_length_boundary(route_context: RouteContext) -> None:
+    minimum = minimum_valid_length(route_context)
+    assert minimum == 3
+    assert check_initial_length(9, InitialLengthPolicy(minimum, GAConfig().initial_length_factor)).is_valid
+
+
+def test_initial_length_rejected(route_context: RouteContext) -> None:
+    minimum = minimum_valid_length(route_context)
+    assert not check_initial_length(9.01, InitialLengthPolicy(minimum)).is_valid
+    assert check_initial_length(5, InitialLengthPolicy(minimum)).is_valid
+
+
+def test_initial_reference_invalid(route_context: RouteContext) -> None:
+    for base in (None, 0, float("nan")):
+        assert not check_initial_length(5, InitialLengthPolicy(base)).is_valid
+    assert not check_initial_length(5, InitialLengthPolicy(3, 0)).is_valid
+    assert not check_initial_length(float("inf"), InitialLengthPolicy(3)).is_valid
+    assert not check_initial_length(True, InitialLengthPolicy(3)).is_valid
+    assert not check_initial_length(5, InitialLengthPolicy(1e308, 3)).is_valid
+    context = replace(route_context, closed_edges=frozenset(route_context.graph.edges(keys=True)))
+    assert minimum_valid_length(context) is None

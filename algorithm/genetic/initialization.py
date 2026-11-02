@@ -1,11 +1,12 @@
 """Одна попытка построения особи через случайные промежуточные вершины."""
 
 from dataclasses import dataclass
+from math import fsum, isfinite
 from random import Random
 from typing import Callable, Hashable, Mapping
 
 from algorithm.genetic.validation import validate_route
-from algorithm.models import EdgeId, GAConfig, Route, RouteContext
+from algorithm.models import EdgeId, GAConfig, Route, RouteContext, ValidationReport
 from data.road_graph import find_connector
 
 
@@ -19,6 +20,48 @@ class CandidateOutcome:
     route: Route | None
     reason: str | None
     waypoints: tuple[Hashable, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class InitialLengthPolicy:
+    """Метры эталона и утверждённый множитель предела P0."""
+
+    minimum_length_m: float | None
+    factor: float = 3.0
+
+
+def minimum_valid_length(context: RouteContext) -> float | None:
+    """Найти только длину кратчайшего допустимого пути, не особь P0."""
+
+    def by_length(edge: EdgeId, attributes: Mapping[str, object]) -> float:
+        try:
+            return float(attributes["length"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("edge length must be known in metres") from error
+
+    route = find_connector(context.start, context.end, context, Random(0), weight=by_length)
+    if route is None:
+        return None
+    return fsum(float(context.graph[u][v][key]["length"]) for u, v, key in route.edges)
+
+
+def check_initial_length(route_length_m: float, policy: InitialLengthPolicy) -> ValidationReport:
+    """Проверить L≤k_init·L_min в метрах, не меняя маршрут."""
+
+    base = policy.minimum_length_m
+    factor = policy.factor
+    if type(base) not in (int, float) or not isfinite(base) or base <= 0:
+        return ValidationReport(errors=("L_min must be positive and finite",))
+    if type(factor) not in (int, float) or not isfinite(factor) or factor <= 0:
+        return ValidationReport(errors=("initial length factor must be positive and finite",))
+    if type(route_length_m) not in (int, float) or not isfinite(route_length_m) or route_length_m <= 0:
+        return ValidationReport(errors=("route length must be positive and finite",))
+    limit = factor * base
+    if not isfinite(limit):
+        return ValidationReport(errors=("initial length limit is not finite",))
+    if route_length_m > limit:
+        return ValidationReport(errors=("initial route exceeds k_init × L_min",))
+    return ValidationReport()
 
 
 def generate_candidate(
