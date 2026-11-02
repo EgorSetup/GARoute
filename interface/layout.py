@@ -9,7 +9,7 @@ from interface.controls import (
     UIState, apply_setting_change, build_fitness_controls, build_ga_controls,
     build_normalization_controls, build_penalty_controls,
 )
-from interface.map_view import MapHandle, create_map
+from interface.map_view import MapHandle, create_map, set_map_mode
 
 
 @dataclass(slots=True)
@@ -63,6 +63,9 @@ STYLE = """
     box-shadow: 0 5px 24px rgba(18,49,71,.09); }
   .map-message-title { font: 700 15px/1.3 system-ui, sans-serif; }
   .map-message-copy { color: var(--muted); font: 400 12px/1.4 system-ui, sans-serif; }
+  .map-demo-status { position: absolute; z-index: 500; bottom: 25px; left: 18px;
+    max-width: 80%; padding: 8px 10px; background: white; border: 1px solid #ce3f35;
+    border-radius: 6px; font: 600 12px/1.4 system-ui, sans-serif; pointer-events: none; }
   .right-panel { padding: 0; display: flex; flex-direction: column; min-height: 0; }
   .right-panel .q-tabs { border-bottom: 1px solid var(--line); }
   .right-panel .q-tab-panels { flex: 1; min-height: 0; overflow-y: auto; }
@@ -110,7 +113,7 @@ def _build_header() -> None:
             _disabled_button("Шаг вперёд", "Расчёты ещё не выполнены", "skip_next")
 
 
-def _build_left_panel() -> None:
+def _build_left_panel(state: UIState) -> None:
     with ui.element("aside").classes("side-panel left-panel"):
         with ui.element("section").classes("panel-section"):
             ui.label("Маршрут").classes("panel-heading")
@@ -127,6 +130,22 @@ def _build_left_panel() -> None:
         with ui.element("section").classes("panel-section"):
             ui.label("Легенда").classes("panel-heading")
             ui.label("Маршруты появятся после расчёта.").classes("panel-copy")
+        if state.demo_mode:
+            with ui.element("section").classes("panel-section"):
+                ui.label("ДЕМО: события карты").classes("panel-heading")
+                ui.label("Тестовые клики не задают реальные A/B или пробки.").classes("panel-copy")
+                mode_label = ui.label("Режим: просмотр").classes("panel-copy")
+
+                def change_mode(value: str) -> None:
+                    if set_map_mode(state, value):
+                        mode_label.set_text(f"Режим: {value}")
+
+                ui.select(
+                    {"view": "Просмотр", "A": "Выбрать A", "B": "Выбрать B",
+                     "traffic": "Редактировать пробку"},
+                    label="Режим карты", value="view",
+                    on_change=lambda e: change_mode(e.value),
+                ).props("outlined dense").classes("setting-field")
 
 
 def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
@@ -158,7 +177,7 @@ def build_layout(state: UIState) -> ViewHandles:
     with ui.element("div").classes("app-shell"):
         _build_header()
         with ui.element("main").classes("workspace"):
-            _build_left_panel()
+            _build_left_panel(state)
             map_view = create_map(state)
             tabs, panels = _build_right_panel(state)
     return ViewHandles(map_view=map_view, tabs=tabs, panels=panels)

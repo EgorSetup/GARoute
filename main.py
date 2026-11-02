@@ -1,5 +1,7 @@
 """Точка запуска локального интерфейса GARoute."""
 
+import os
+
 from nicegui import ui
 
 from interface.controls import UIState
@@ -10,7 +12,7 @@ from interface.layout import build_layout
 def index() -> None:
     """Создать отдельное состояние для открытой страницы."""
 
-    build_layout(UIState())
+    build_layout(UIState(demo_mode=os.environ.get("GAROUTE_MAP_EVENT_TEST") == "1"))
 
 
 if __name__ in {"__main__", "__mp_main__"}:

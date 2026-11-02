@@ -18,6 +18,13 @@ class UIState:
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
     custom_weights: tuple[float, float, float] | None = None
+    map_mode: str = "view"
+    demo_mode: bool = False
+    demo_point_a: tuple[float, float] | None = None
+    demo_point_b: tuple[float, float] | None = None
+    demo_segment_level: int = 1
+    demo_map_clicks: int = 0
+    demo_segment_clicks: int = 0
 
 
 @dataclass(frozen=True, slots=True)
