@@ -7,7 +7,7 @@ from random import Random
 from typing import Callable, Hashable, Mapping
 
 from algorithm.genetic.validation import validate_route
-from algorithm.models import EdgeId, GAConfig, Route, RouteContext, ValidationReport
+from algorithm.models import EdgeId, EligibilityReport, GAConfig, Route, RouteContext, ValidationReport
 from data.road_graph import find_connector
 
 
@@ -156,6 +156,7 @@ def generate_initial_population(
     config: GAConfig,
     rng: Random,
     weight_strategy: WeightStrategy,
+    eligible: Callable[[Route], EligibilityReport] | None = None,
 ) -> PopulationResult:
     """Заполнить N мест с конечным числом попыток на каждое место."""
 
@@ -194,6 +195,18 @@ def generate_initial_population(
             if not length_report.is_valid:
                 rejections["length_limit"] += 1
                 continue
+            if eligible is not None:
+                try:
+                    eligibility = eligible(route)
+                except (ValueError, TypeError, ArithmeticError, KeyError):
+                    rejections["eligibility_error"] += 1
+                    continue
+                if not isinstance(eligibility, EligibilityReport):
+                    rejections["eligibility_error"] += 1
+                    continue
+                if not eligibility.eligible:
+                    rejections.update(eligibility.reasons or ("ineligible_route",))
+                    continue
             signature = route_signature(route)
             if copies[signature] >= config.max_copies:
                 rejections["duplicate_limit"] += 1

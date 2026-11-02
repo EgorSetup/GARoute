@@ -67,8 +67,8 @@ def test_preset_locks_weights() -> None:
     assert propose_fitness_change(state, "weight_time", 40).errors
     assert apply_setting_change(state, propose_fitness_change(state, "preset", "easy"))
     assert state.config.fitness.weights == (0.15, 0.10, 0.75)
-    assert state.config.fitness.easy_length_delta is None
-    assert state.config.fitness.easy_time_delta is None
+    assert state.config.fitness.easy_length_delta == 0.5
+    assert state.config.fitness.easy_time_delta == 0.5
 
     assert apply_setting_change(state, propose_fitness_change(state, "preset", "custom"))
     assert apply_setting_change(state, propose_fitness_change(state, "weights", (20, 30, 50)))

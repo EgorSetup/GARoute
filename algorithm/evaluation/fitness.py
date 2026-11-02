@@ -2,13 +2,18 @@
 
 from dataclasses import dataclass, field
 from math import fsum, isclose, isfinite
+from random import Random
 from typing import Mapping
 
 from algorithm.genetic.validation import validate_route
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
-from algorithm.models import EdgeId, RoadEdge, Route, RouteContext, RouteMetrics
-from config import PRESET_WEIGHTS, TRAFFIC_SPEED_FACTORS
+from algorithm.models import (
+    EasyLimits, EasyReferences, EdgeId, EligibilityReport, RoadEdge, Route, RouteContext,
+    RouteMetrics,
+)
+from config import EASY_DELTA_MAX, PRESET_WEIGHTS, TRAFFIC_SPEED_FACTORS
 from data.traffic import speed_factor
+from data.road_graph import find_connector
 
 
 Weights = tuple[float, float, float]
@@ -64,6 +69,31 @@ def evaluate_cost(metrics: RouteMetrics, weights: Weights,
     if not isfinite(cost) or cost < 0:
         raise ValueError("nonfinite fitness cost")
     return cost
+
+
+def check_easy_constraints(metrics: RouteMetrics, references: EasyReferences,
+                           limits: EasyLimits) -> EligibilityReport:
+    """Проверить оба жёстких предела; нарушение не превращать в штраф J."""
+
+    values = (metrics.length_m, metrics.time_s, references.length_min_m,
+              references.time_min_s, limits.length_delta, limits.time_delta)
+    if not all(_finite_number(value) for value in values):
+        raise ValueError("nonfinite easy constraints")
+    if (metrics.length_m <= 0 or metrics.time_s <= 0
+            or references.length_min_m <= 0 or references.time_min_s <= 0
+            or not 0 <= limits.length_delta <= EASY_DELTA_MAX
+            or not 0 <= limits.time_delta <= EASY_DELTA_MAX):
+        raise ValueError("invalid easy constraints")
+    length_bound = (1 + limits.length_delta) * references.length_min_m
+    time_bound = (1 + limits.time_delta) * references.time_min_s
+    if not isfinite(length_bound) or not isfinite(time_bound):
+        raise ValueError("nonfinite easy bounds")
+    reasons = []
+    if metrics.length_m > length_bound:
+        reasons.append("easy_length_exceeded")
+    if metrics.time_s > time_bound:
+        reasons.append("easy_time_exceeded")
+    return EligibilityReport(not reasons, tuple(reasons))
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,3 +165,34 @@ def unknown_required_speeds(context: RouteContext, time_model: TimeModel) -> tup
         if speed is None or not isfinite(speed) or speed <= 0:
             unknown.append(edge_id)
     return tuple(unknown)
+
+
+def compute_easy_references(context: RouteContext, time_model: TimeModel) -> EasyReferences:
+    """Найти L_min и T_min отдельными полными поисками при одних дорожных условиях."""
+
+    unknown = unknown_required_speeds(context, time_model)
+    if unknown:
+        raise ValueError(f"unknown required speeds: {len(unknown)}")
+    def by_length(edge_id: EdgeId, _attributes: Mapping[str, object]) -> float:
+        return time_model.roads[edge_id].length_m
+
+    shortest = find_connector(context.start, context.end, context, Random(0),
+                              weight=by_length, complete=True)
+    if shortest is None:
+        raise ValueError("no valid route for L_min")
+    length_min = calculate_length(shortest, context, time_model)
+
+    def by_time(edge_id: EdgeId, _attributes: Mapping[str, object]) -> float:
+        edge = time_model.roads[edge_id]
+        level = time_model.levels.get(edge_id, 1)
+        return 3.6 * edge.length_m / (edge.speed_kph * speed_factor(level, time_model.factors))
+
+    quickest = find_connector(context.start, context.end, context, Random(0),
+                              weight=by_time, complete=True)
+    if quickest is None:
+        raise ValueError("no valid route for T_min")
+    references = EasyReferences(length_min, calculate_travel_time(quickest, context, time_model))
+    if not all(_finite_number(value) and value > 0 for value in
+               (references.length_min_m, references.time_min_s)):
+        raise ValueError("invalid easy references")
+    return references

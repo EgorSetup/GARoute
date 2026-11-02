@@ -51,6 +51,30 @@ class RouteMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class EasyReferences:
+    """Отдельные от нормализации минимумы для двух ограничений новичка."""
+
+    length_min_m: float
+    time_min_s: float
+
+
+@dataclass(frozen=True, slots=True)
+class EasyLimits:
+    """Разрешённые доли превышения L_min и T_min, Q05 VERIFY."""
+
+    length_delta: float
+    time_delta: float
+
+
+@dataclass(frozen=True, slots=True)
+class EligibilityReport:
+    """Результат жёсткого фильтра без изменения стоимости J."""
+
+    eligible: bool
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class Individual:
     """Маршрут с рассчитанной извне стоимостью J."""
 
@@ -138,8 +162,8 @@ class FitnessConfig:
     time_reference_s: float | None = None
     length_reference_m: float | None = None
     complexity_reference: float | None = None
-    easy_length_delta: float | None = None  # OPEN Q05-C
-    easy_time_delta: float | None = None  # OPEN Q05-C
+    easy_length_delta: float | None = None  # Q05-C VERIFY, default_config задаёт 0.5
+    easy_time_delta: float | None = None  # Q05-C VERIFY
 
 
 @dataclass(frozen=True, slots=True)

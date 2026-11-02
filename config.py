@@ -56,6 +56,8 @@ PRESET_WEIGHTS = {
     "short": (0.0, 1.0, 0.0),
     "easy": (0.15, 0.10, 0.75),
 }
+EASY_DELTA_DEFAULT = 0.5  # Q05-C RESOLVED / VERIFY
+EASY_DELTA_MAX = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +110,11 @@ def working_penalty_maxima() -> tuple[float, ...]:
 def default_config() -> AppConfig:
     """Создать настройки с утверждёнными и явно помеченными VERIFY значениями."""
 
-    return AppConfig(ga=GAConfig(), fitness=FitnessConfig(penalties=working_penalty_defaults()))
+    return AppConfig(ga=GAConfig(), fitness=FitnessConfig(
+        penalties=working_penalty_defaults(),
+        easy_length_delta=EASY_DELTA_DEFAULT,
+        easy_time_delta=EASY_DELTA_DEFAULT,
+    ))
 
 
 def _integer_at_least(value: object, minimum: int) -> bool:
@@ -217,8 +223,8 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
 
     for name in ("easy_length_delta", "easy_time_delta"):
         value = getattr(config, name)
-        if value is not None and (not _finite_number(value) or value < 0):
-            errors.append(f"{name} должен быть неотрицательным конечным числом")
+        if value is not None and (not _finite_number(value) or not 0 <= value <= EASY_DELTA_MAX):
+            errors.append(f"{name} должен быть в диапазоне 0–200%")
         if config.preset == "easy" and value is None:
             unresolved.append(f"Q05-C: {name} не согласован")
 

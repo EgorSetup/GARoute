@@ -11,7 +11,10 @@ from algorithm.genetic.initialization import route_signature
 from algorithm.genetic.mutation import MutationPolicy, mutate
 from algorithm.genetic.selection import tournament_select
 from algorithm.genetic.validation import validate_route
-from algorithm.models import GAConfig, GenerationEvent, Individual, Route, RouteContext, RouteMetrics, RouteValidationReport
+from algorithm.models import (
+    EligibilityReport, GAConfig, GenerationEvent, Individual, Route, RouteContext,
+    RouteMetrics, RouteValidationReport,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +24,7 @@ class GenerationContext:
     routes: RouteContext
     config: GAConfig
     mutation_policy: MutationPolicy
+    eligible: Callable[[RouteMetrics], EligibilityReport] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +157,16 @@ def build_next_generation(
         return empty("invalid_current_population")
     if max(Counter(route_signature(individual.route) for individual in current).values()) > config.max_copies:
         return empty("invalid_current_copies")
+    if run_context.eligible is not None:
+        for individual in current:
+            if individual.metrics is None:
+                return empty("ineligible_current_population")
+            try:
+                report = run_context.eligible(individual.metrics)
+            except (ValueError, TypeError, ArithmeticError):
+                return empty("ineligible_current_population")
+            if not isinstance(report, EligibilityReport) or not report.eligible:
+                return empty("ineligible_current_population")
 
     elite_pairs = sorted(enumerate(current), key=lambda pair: pair[1].j)[:config.elite_count]
     accepted = [individual for _, individual in elite_pairs]
@@ -230,6 +244,21 @@ def build_next_generation(
                 rejected["invalid_evaluation"] += 1
                 events.append(GenerationEvent("admission", parents, accepted=False, reasons=("invalid_evaluation",)))
                 continue
+            if run_context.eligible is not None:
+                if evaluated.metrics is None:
+                    eligibility = EligibilityReport(False, ("missing_metrics",))
+                else:
+                    try:
+                        eligibility = run_context.eligible(evaluated.metrics)
+                    except (ValueError, TypeError, ArithmeticError):
+                        eligibility = EligibilityReport(False, ("eligibility_error",))
+                if not isinstance(eligibility, EligibilityReport):
+                    eligibility = EligibilityReport(False, ("eligibility_error",))
+                if not eligibility.eligible:
+                    reasons = eligibility.reasons or ("ineligible_route",)
+                    rejected.update(set(reasons))
+                    events.append(GenerationEvent("admission", parents, accepted=False, reasons=tuple(reasons)))
+                    continue
             origin = "mutation" if mutation_changed else "crossover" if crossed_changed else "copy"
             events.append(GenerationEvent(
                 "admission", parents, len(accepted), changed=crossed_changed or mutation_changed,

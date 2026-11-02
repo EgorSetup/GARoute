@@ -16,9 +16,12 @@ from nicegui.elements.leaflet.leaflet import Leaflet
 
 from algorithm.genetic.initialization import generate_initial_population, production_weight_strategy
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
-from algorithm.evaluation.fitness import TimeModel, calculate_length, calculate_travel_time
+from algorithm.evaluation.fitness import (
+    TimeModel, calculate_length, calculate_travel_time, check_easy_constraints,
+    compute_easy_references,
+)
 from algorithm.evaluation.normalization import compute_scales
-from algorithm.models import Route, RouteContext, RouteMetrics
+from algorithm.models import EasyLimits, Route, RouteContext, RouteMetrics
 from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
@@ -173,10 +176,14 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
             state.initial_complexities = ()
             state.initial_scales = None
             state.initial_scale_error = None
+            state.easy_references = None
+            state.easy_reference_error = None
             if state.refresh_population_results is not None:
                 state.refresh_population_results()
             if state.refresh_normalization is not None:
                 state.refresh_normalization()
+            if state.refresh_easy is not None:
+                state.refresh_easy()
             if not state.demo_mode:
                 population_label.set_text("P0 ещё не сформирована")
 
@@ -284,10 +291,41 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     app_config = state.config
                     config = app_config.ga
                     context = RouteContext(graph, start, end, state.turn_rules)
+                    time_model = TimeModel(roads.edges)
+                    easy_preflight = None
+                    eligible = None
+                    if app_config.fitness.preset == "easy":
+                        try:
+                            easy_preflight = await asyncio.to_thread(
+                                compute_easy_references, context, time_model,
+                            )
+                        except (ValueError, KeyError, OverflowError) as error:
+                            if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
+                                p0_button.enable()
+                                return
+                            clear_population()
+                            state.easy_reference_error = f"L_min/T_min недоступны: {error}"
+                            if state.refresh_easy is not None:
+                                state.refresh_easy()
+                            population_label.set_text(f"P0 Лёгкого не сформирована: {error}")
+                            p0_button.enable()
+                            return
+                        if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
+                            p0_button.enable()
+                            return
+                        limits = EasyLimits(app_config.fitness.easy_length_delta,
+                                            app_config.fitness.easy_time_delta)
+
+                        def eligible(route: Route):
+                            metrics = RouteMetrics(
+                                calculate_length(route, context, time_model),
+                                calculate_travel_time(route, context, time_model), 0,
+                            )
+                            return check_easy_constraints(metrics, easy_preflight, limits)
                     try:
                         result = await asyncio.to_thread(
                             generate_initial_population, context, config, Random(config.seed),
-                            production_weight_strategy(config.random_weight_strength),
+                            production_weight_strategy(config.random_weight_strength), eligible,
                         )
                     except (ValueError, OverflowError) as error:
                         population_label.set_text(f"P0 не сформирована: {error}")
@@ -300,6 +338,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     complexity_error = None
                     scales = None
                     scale_error = None
+                    easy_refs = None
+                    easy_error = None
                     if result.error is None and app_config.fitness.penalties is not None:
                         def evaluate_p0():
                             policy = PenaltyPolicy(roads.edges)
@@ -307,18 +347,26 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                                 extract_penalty_events(route, context, policy),
                                 app_config.fitness.penalties,
                             ) for route in result.population)
-                            time_model = TimeModel(roads.edges)
+                            if easy_preflight is not None:
+                                references, reference_error = easy_preflight, None
+                            else:
+                                try:
+                                    references = compute_easy_references(context, time_model)
+                                    reference_error = None
+                                except (ValueError, KeyError, OverflowError) as error:
+                                    references = None
+                                    reference_error = f"L_min/T_min недоступны: {error}"
                             try:
                                 metrics = tuple(RouteMetrics(
                                     calculate_length(route, context, time_model),
                                     calculate_travel_time(route, context, time_model),
                                     item.total,
                                 ) for route, item in zip(result.population, evaluated))
-                                return evaluated, compute_scales(metrics), None
+                                return evaluated, compute_scales(metrics), None, references, reference_error
                             except (ValueError, OverflowError) as error:
-                                return evaluated, None, f"Автоэталоны не вычислены: {error}"
+                                return evaluated, None, f"Автоэталоны не вычислены: {error}", references, reference_error
                         try:
-                            breakdowns, scales, scale_error = await asyncio.to_thread(evaluate_p0)
+                            breakdowns, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
                         except (ValueError, KeyError, OverflowError) as error:
                             complexity_error = str(error)
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
@@ -329,6 +377,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     state.initial_complexities = breakdowns
                     state.initial_scales = scales
                     state.initial_scale_error = scale_error
+                    state.easy_references = easy_refs
+                    state.easy_reference_error = easy_error
                     if result.error is None:
                         population_layers.extend(render_population(map_element, result.population, roads))
                     status = population_status_text(result)
@@ -339,6 +389,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         state.refresh_population_results()
                     if state.refresh_normalization is not None:
                         state.refresh_normalization()
+                    if state.refresh_easy is not None:
+                        state.refresh_easy()
                     p0_button.enable()
 
                 p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")

@@ -10,8 +10,11 @@ from nicegui.elements.number import Number
 
 from algorithm.evaluation.penalties import PenaltyBreakdown
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
-from algorithm.models import AppConfig, GAConfig, RouteContext, ValidationReport
-from config import PRESET_WEIGHTS, default_config, penalty_catalog, validate_config, working_penalty_defaults
+from algorithm.models import AppConfig, EasyReferences, GAConfig, RouteContext, ValidationReport
+from config import (
+    EASY_DELTA_MAX, PRESET_WEIGHTS, default_config, penalty_catalog, validate_config,
+    working_penalty_defaults,
+)
 from data.osm_loader import RoadData
 from data.restrictions import TurnRules
 from data.road_graph import NormalizedRoadData, check_reachability
@@ -34,8 +37,11 @@ class UIState:
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
     initial_scales: NormalizationScales | None = None
     initial_scale_error: str | None = None
+    easy_references: EasyReferences | None = None
+    easy_reference_error: str | None = None
     refresh_population_results: Callable[[], None] | None = None
     refresh_normalization: Callable[[], None] | None = None
+    refresh_easy: Callable[[], None] | None = None
     clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
@@ -230,12 +236,16 @@ def confirm_change(state: UIState) -> UIState:
     state.initial_complexities = ()
     state.initial_scales = None
     state.initial_scale_error = None
+    state.easy_references = None
+    state.easy_reference_error = None
     if state.clear_population_layers is not None:
         state.clear_population_layers()
     elif state.refresh_population_results is not None:
         state.refresh_population_results()
     if state.clear_population_layers is None and state.refresh_normalization is not None:
         state.refresh_normalization()
+    if state.clear_population_layers is None and state.refresh_easy is not None:
+        state.refresh_easy()
     cancel_change(state)
     return state
 
@@ -283,6 +293,11 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
         if value not in (None, "") and (number is None or number <= 0):
             return PendingChange(key, value, None, ("Эталон должен быть положительным конечным числом",))
         updated = replace(fitness, **{key: number})
+    elif key in ("easy_length_delta", "easy_time_delta"):
+        number = _numeric_input(value)
+        if number is None or not 0 <= number <= EASY_DELTA_MAX * 100:
+            return PendingChange(key, value, None, ("Превышение должно быть в диапазоне 0–200%",))
+        updated = replace(fitness, **{key: number / 100})
     else:
         return PendingChange(key, value, None, ("Неизвестная настройка Fitness",))
 
@@ -375,6 +390,7 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
         )
         error_label = ui.label("").classes("setting-error")
         details = None
+        easy_details = None
 
         def render_weights() -> None:
             assert details is not None
@@ -383,7 +399,7 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
             with details:
                 if fitness.preset in PRESET_WEIGHTS:
                     if fitness.preset == "easy":
-                        ui.label("Рабочие веса Q04 VERIFY; ограничения Лёгкого Q05 ещё открыты.").classes("setting-error")
+                        ui.label("Рабочие веса Q04 VERIFY; ограничения Лёгкого Q05 VERIFY.").classes("setting-error")
                     for name, value in zip(("Время T", "Длина L", "Сложность C"), fitness.weights):
                         ui.label(f"{name}: {value * 100:g}%").classes("panel-copy")
                         ui.slider(min=0, max=100, value=value * 100).disable().classes("w-full")
@@ -412,16 +428,18 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
             if value == state.config.fitness.preset:
                 error_label.set_text("")
                 render_weights()
+                render_easy()
                 return
             pending = propose_fitness_change(state, "preset", value)
             error_label.set_text("; ".join(pending.errors))
             if not pending.errors:
                 old = state.config.fitness.preset
-                submit(pending, lambda: restore_preset(old), render_weights)
+                submit(pending, lambda: restore_preset(old), lambda: (render_weights(), render_easy()))
 
         def restore_preset(old: str | None) -> None:
             preset_select.set_value(old)
             render_weights()
+            render_easy()
             error_label.set_text("")
 
         preset_select = ui.select(
@@ -432,16 +450,36 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
         ).props("outlined dense").classes("setting-field")
         details = ui.column().classes("w-full")
         render_weights()
-        ui.label("Лёгкий: L ≤ (1 + δL)·L_min и T ≤ (1 + δT)·T_min.").classes("panel-copy")
-        ui.label("Пороги δL/δT и место фильтрации ещё не согласованы (Q05-C).").classes(
-            "panel-copy"
-        )
-        ui.number("Превышение длины δL, %", value=None).props(
-            "outlined dense disable"
-        ).classes("setting-field")
-        ui.number("Превышение времени δT, %", value=None).props(
-            "outlined dense disable"
-        ).classes("setting-field")
+        easy_details = ui.column().classes("w-full")
+
+        def render_easy() -> None:
+            easy_details.clear()
+            with easy_details:
+                ui.label("Лёгкий: L ≤ (1 + δL)·L_min и T ≤ (1 + δT)·T_min; оба предела жёсткие.").classes("panel-copy")
+                if state.easy_references is not None:
+                    ui.label(f"L_min: {state.easy_references.length_min_m:.2f} м; "
+                             f"T_min: {state.easy_references.time_min_s:.2f} с").classes("panel-copy")
+                elif state.easy_reference_error is not None:
+                    ui.label(state.easy_reference_error).classes("setting-error")
+                else:
+                    ui.label("L_min/T_min будут рассчитаны при подготовке «Лёгкого».").classes("panel-copy")
+                if state.config.fitness.preset == "easy":
+                    ui.label("Рабочие пределы Q05 VERIFY; 0–200%, шаг 10%. Недостаток допустимых маршрутов — ошибка, без ослабления.").classes("setting-error")
+                    fields = (("easy_length_delta", "Превышение длины δL, %"),
+                              ("easy_time_delta", "Превышение времени δT, %"))
+                    for key, label in fields:
+                        def change(value: object, field: str = key) -> None:
+                            pending = propose_fitness_change(state, field, value)
+                            error_label.set_text("; ".join(pending.errors))
+                            if not pending.errors:
+                                submit(pending, render_easy, render_easy)
+                        ui.number(label, value=getattr(state.config.fitness, key) * 100,
+                                  min=0, max=200, step=10,
+                                  on_change=lambda event, field=key: change(event.value, field)
+                                  ).props("outlined dense").classes("setting-field")
+
+        state.refresh_easy = render_easy
+        render_easy()
 
 
 def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
