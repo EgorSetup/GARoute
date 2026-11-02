@@ -1,7 +1,7 @@
 """Общие структуры расчёта, не зависящие от интерфейса."""
 
 from dataclasses import dataclass
-from typing import Hashable, TYPE_CHECKING
+from typing import Hashable, Mapping, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from networkx import MultiDiGraph
@@ -9,6 +9,28 @@ if TYPE_CHECKING:
 
 
 EdgeId = tuple[Hashable, Hashable, Hashable]
+
+
+@dataclass(frozen=True, slots=True)
+class RoadEdge:
+    """Нормализованное ребро с исходными OSM-тегами и их происхождением."""
+
+    edge_id: EdgeId
+    geometry_lonlat: tuple[tuple[float, float], ...]
+    geometry_source: str
+    length_m: float
+    length_source: str
+    osm_way_ids: tuple[int, ...]
+    raw_attributes: Mapping[str, object]
+    speed_kph: float | None
+    speed_status: str
+    speed_source: str | None
+    raw_speed: object | None
+
+    def tag_status(self, name: str) -> str:
+        """Отличить подтверждённый тег от неизвестного признака."""
+
+        return "observed" if name in self.raw_attributes and self.raw_attributes[name] is not None else "unknown"
 
 
 @dataclass(frozen=True, slots=True)
