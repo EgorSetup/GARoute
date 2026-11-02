@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from nicegui import ui
 from nicegui.elements.tabs import TabPanels, Tabs
 
-from interface.controls import UIState
+from interface.controls import UIState, apply_setting_change, build_ga_controls
 from interface.map_view import MapHandle, create_map
 
 
@@ -41,7 +41,7 @@ STYLE = """
   .top-actions { display: flex; align-items: center; gap: 7px; }
   .top-actions .q-btn { min-height: 35px; }
   .workspace { display: grid; grid-template-columns: 248px minmax(0, 1fr) 360px;
-    gap: 12px; padding: 12px; min-height: calc(100vh - 78px); }
+    gap: 12px; padding: 12px; height: calc(100vh - 78px); min-height: 620px; }
   .side-panel { min-width: 0; background: var(--paper); border: 1px solid var(--line);
     border-radius: 12px; padding: 20px; overflow-y: auto; }
   .panel-heading { font: 700 18px/1.3 system-ui, sans-serif; color: var(--ink); }
@@ -60,21 +60,24 @@ STYLE = """
     box-shadow: 0 5px 24px rgba(18,49,71,.09); }
   .map-message-title { font: 700 15px/1.3 system-ui, sans-serif; }
   .map-message-copy { color: var(--muted); font: 400 12px/1.4 system-ui, sans-serif; }
-  .right-panel { padding: 0; display: flex; flex-direction: column; }
+  .right-panel { padding: 0; display: flex; flex-direction: column; min-height: 0; }
   .right-panel .q-tabs { border-bottom: 1px solid var(--line); }
   .right-panel .q-tab-panels { flex: 1; min-height: 0; overflow-y: auto; }
   .tab-content { padding: 20px; }
+  .setting-field { width: 100%; margin-top: 12px; }
+  .setting-error { color: #a73835; font: 500 12px/1.4 system-ui, sans-serif; }
+  .right-panel .q-expansion-item { border-bottom: 1px solid var(--line); }
   .empty-block { margin-top: 18px; padding: 18px; border: 1px dashed #b9cbd4;
     border-radius: 9px; background: #f7fafb; }
   @media (max-width: 1120px) {
-    .workspace { grid-template-columns: 220px minmax(0, 1fr); }
+    .workspace { grid-template-columns: 220px minmax(0, 1fr); height: auto; }
     .right-panel { grid-column: 1 / -1; min-height: 300px; }
   }
   @media (max-width: 720px) {
     .topbar { padding: 16px; }
     .brand { display: block; }
     .brand-subtitle { margin-top: 5px; }
-    .workspace { display: flex; flex-direction: column; padding: 8px; }
+    .workspace { display: flex; flex-direction: column; padding: 8px; min-height: 0; }
     .map-stage, .map-canvas { min-height: 420px; }
     .map-stage { order: -1; }
     .side-panel { overflow: visible; }
@@ -121,7 +124,7 @@ def _build_left_panel() -> None:
             ui.label("Маршруты появятся после расчёта.").classes("panel-copy")
 
 
-def _build_right_panel() -> tuple[Tabs, TabPanels]:
+def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
     with ui.element("aside").classes("side-panel right-panel"):
         with ui.tabs().classes("w-full") as tabs:
             settings = ui.tab("Настройки")
@@ -129,9 +132,7 @@ def _build_right_panel() -> tuple[Tabs, TabPanels]:
         with ui.tab_panels(tabs, value=settings, keep_alive=True).classes("w-full") as panels:
             with ui.tab_panel(settings).classes("tab-content"):
                 ui.label("Настройки расчёта").classes("panel-heading")
-                with ui.element("div").classes("empty-block"):
-                    ui.label("Параметры появятся на следующем этапе.").classes("panel-copy")
-                    ui.label("Неутверждённые значения останутся пустыми.").classes("panel-copy")
+                build_ga_controls(state, lambda pending: apply_setting_change(state, pending))
             with ui.tab_panel(results).classes("tab-content"):
                 ui.label("Результаты").classes("panel-heading")
                 with ui.element("div").classes("empty-block"):
@@ -151,5 +152,5 @@ def build_layout(state: UIState) -> ViewHandles:
         with ui.element("main").classes("workspace"):
             _build_left_panel()
             map_view = create_map(state)
-            tabs, panels = _build_right_panel()
+            tabs, panels = _build_right_panel(state)
     return ViewHandles(map_view=map_view, tabs=tabs, panels=panels)
