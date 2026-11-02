@@ -126,14 +126,20 @@ def build_road_data(raw: RawRoadData) -> NormalizedRoadData:
             raise ValueError(f"edge {edge_id!r} has nonpositive length")
         raw_speed, speed_source = _selected_speed(attrs)
         speed_kph = _speed_kph(raw_speed)
+        speed_status = "observed" if speed_kph is not None else "unknown"
+        speed_rule = "explicit_numeric" if speed_kph is not None else None
+        if raw_speed == "RU:urban":
+            speed_kph = 60.0
+            speed_status = "implicit_osm_verify"
+            speed_rule = "RU:urban_to_60_kph"
         if speed_kph is None:
             unknown.append(edge_id)
         edges[edge_id] = RoadEdge(
             edge_id=edge_id, geometry_lonlat=geometry, geometry_source=geometry_source,
             length_m=length_m, length_source=length_source,
             osm_way_ids=_way_ids(attrs.get("osmid")), raw_attributes=dict(attrs),
-            speed_kph=speed_kph, speed_status="observed" if speed_kph is not None else "unknown",
-            speed_source=speed_source, raw_speed=raw_speed,
+            speed_kph=speed_kph, speed_status=speed_status,
+            speed_source=speed_source, speed_rule=speed_rule, raw_speed=raw_speed,
         )
         for way_id in edges[edge_id].osm_way_ids:
             way_edges.setdefault(way_id, []).append(edge_id)

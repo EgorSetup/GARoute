@@ -25,6 +25,7 @@ class RoadEdge:
     speed_kph: float | None
     speed_status: str
     speed_source: str | None
+    speed_rule: str | None
     raw_speed: object | None
 
     def tag_status(self, name: str) -> str:

@@ -61,8 +61,11 @@ def test_missing_speed() -> None:
     graph[1][2][0].pop("maxspeed")
     graph[1][2][1]["maxspeed"] = ["40", "60"]
     data = build_road_data(raw_data(graph))
-    assert set(data.unknown_speed_edges) == set(data.edges)
-    assert all(edge.speed_kph is None and edge.speed_status == "unknown" for edge in data.edges.values())
+    assert set(data.unknown_speed_edges) == {(1, 2, 0), (1, 2, 1)}
+    assert all(data.edges[edge_id].speed_kph is None for edge_id in data.unknown_speed_edges)
+    assert data.edges[2, 1, 0].speed_kph == 60
+    assert data.edges[2, 1, 0].speed_status == "implicit_osm_verify"
+    assert data.edges[2, 1, 0].speed_rule == "RU:urban_to_60_kph"
     assert data.edges[1, 2, 1].raw_speed == ["40", "60"]
     assert data.edges[1, 2, 0].tag_status("maxspeed") == "unknown"
     assert data.edges[2, 1, 0].tag_status("highway") == "observed"
