@@ -19,11 +19,34 @@ class Route:
 
 
 @dataclass(frozen=True, slots=True)
+class RouteMetrics:
+    """Три измерения маршрута; J хранится отдельно в Individual."""
+
+    length_m: float
+    time_s: float
+    complexity: float
+
+
+@dataclass(frozen=True, slots=True)
 class Individual:
     """Маршрут с рассчитанной извне стоимостью J."""
 
     route: Route
     j: float
+    metrics: RouteMetrics | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationEvent:
+    """Факт операции или приёма без геометрии отвергнутого кандидата."""
+
+    kind: str
+    parents: tuple[int, ...] = ()
+    child_index: int | None = None
+    changed: bool = False
+    accepted: bool | None = None
+    reasons: tuple[str, ...] = ()
+    origin: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
