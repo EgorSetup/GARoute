@@ -6,8 +6,9 @@ from nicegui import ui
 from nicegui.elements.tabs import TabPanels, Tabs
 
 from interface.controls import (
-    UIState, apply_setting_change, build_fitness_controls, build_ga_controls,
-    build_normalization_controls, build_penalty_controls,
+    UIState, PendingChange, build_fitness_controls, build_ga_controls,
+    build_normalization_controls, build_penalty_controls, cancel_change,
+    confirm_change, request_condition_change,
 )
 from interface.map_view import MapHandle, create_map, set_map_mode
 from interface.results import build_results_panel
@@ -157,15 +158,54 @@ def _build_left_panel(state: UIState) -> None:
 
 def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
     with ui.element("aside").classes("side-panel right-panel"):
+        pending_ui: dict[str, object] = {}
+        with ui.dialog().props("persistent") as change_dialog, ui.card():
+            ui.label("Изменение условий расчёта").classes("panel-heading")
+            ui.label(
+                "Вы собираетесь изменить условия расчёта. Все результаты предыдущих "
+                "запусков будут безвозвратно удалены. Продолжить?"
+            ).classes("panel-copy")
+
+            def cancel() -> None:
+                cancel_change(state)
+                restore = pending_ui.pop("restore", None)
+                pending_ui.pop("committed", None)
+                change_dialog.close()
+                if restore:
+                    restore()
+
+            def confirm() -> None:
+                confirm_change(state)
+                committed = pending_ui.pop("committed", None)
+                pending_ui.pop("restore", None)
+                change_dialog.close()
+                if committed:
+                    committed()
+
+            with ui.row():
+                ui.button("Отмена", on_click=cancel).props("flat")
+                ui.button("Изменить и удалить", on_click=confirm).props("color=negative")
+
+        def submit(pending: PendingChange, restore, committed) -> None:
+            result = request_condition_change(state, pending)
+            if result.errors:
+                restore()
+            elif state.pending_change is not None:
+                pending_ui["restore"] = restore
+                pending_ui["committed"] = committed
+                change_dialog.open()
+            else:
+                committed()
+
         with ui.tabs().classes("w-full") as tabs:
             settings = ui.tab("Настройки")
             results = ui.tab("Результаты")
         with ui.tab_panels(tabs, value=settings, keep_alive=True).classes("w-full") as panels:
             with ui.tab_panel(settings).classes("tab-content"):
                 ui.label("Настройки расчёта").classes("panel-heading")
-                build_ga_controls(state, lambda pending: apply_setting_change(state, pending))
-                build_fitness_controls(state)
-                build_normalization_controls(state)
+                build_ga_controls(state, submit)
+                build_fitness_controls(state, submit)
+                build_normalization_controls(state, submit)
                 build_penalty_controls(state)
             with ui.tab_panel(results).classes("tab-content"):
                 build_results_panel(state)

@@ -27,6 +27,14 @@ class UIState:
     demo_map_clicks: int = 0
     demo_segment_clicks: int = 0
     playback: PlaybackState = field(default_factory=PlaybackState)
+    run_results: list[object] = field(default_factory=list)
+    generation_history: list[object] = field(default_factory=list)
+    chart_data: dict[str, object] = field(default_factory=dict)
+    selected_run_id: str | None = None
+    highlighted_route_ids: set[str] = field(default_factory=set)
+    pending_change: "PendingChange | None" = None
+    pending_base_config: AppConfig | None = None
+    change_demo_mode: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +45,9 @@ class PendingChange:
     value: object
     candidate: AppConfig | None
     errors: tuple[str, ...] = ()
+
+
+SubmitChange = Callable[[PendingChange, Callable[[], None], Callable[[], None]], None]
 
 
 INTEGER_FIELDS = {
@@ -109,6 +120,63 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
     return True
 
 
+def propose_display_change(state: UIState, key: str, value: object) -> PendingChange:
+    """Проверить параметр показа, который не удаляет расчётную историю."""
+
+    if key != "playback_speed":
+        return PendingChange(key, value, None, ("Неизвестный параметр показа",))
+    speed = _numeric_input(value)
+    if speed is None or speed <= 0:
+        return PendingChange(key, value, None, ("Скорость должна быть положительной",))
+    return PendingChange(key, speed, state.config)
+
+
+def request_condition_change(state: UIState, change: PendingChange) -> PendingChange:
+    """Применить безопасную правку сразу либо сохранить предложение до ответа."""
+
+    if change.errors or change.candidate is None:
+        return change
+    if state.pending_change is not None:
+        return PendingChange(change.key, change.value, None, ("Есть незавершённое изменение",))
+    if change.key == "playback_speed":
+        state.playback.speed = change.value
+    elif change.key == "preset" or change.candidate == state.config or not (
+        state.run_results or state.generation_history or state.chart_data
+    ):
+        apply_setting_change(state, change)
+    else:
+        state.pending_change = change
+        state.pending_base_config = state.config
+    return change
+
+
+def cancel_change(state: UIState) -> None:
+    """Отменить предложение, не трогая действующие условия и историю."""
+
+    state.pending_change = None
+    state.pending_base_config = None
+
+
+def confirm_change(state: UIState) -> UIState:
+    """Атомарно применить предложение и удалить данные прежних условий."""
+
+    change = state.pending_change
+    if change is None or state.pending_base_config != state.config:
+        cancel_change(state)
+        return state
+    if not apply_setting_change(state, change):
+        cancel_change(state)
+        return state
+    state.run_results.clear()
+    state.generation_history.clear()
+    state.chart_data.clear()
+    state.selected_run_id = None
+    state.highlighted_route_ids.clear()
+    state.playback = PlaybackState()
+    cancel_change(state)
+    return state
+
+
 def validate_scales(values: tuple[object, object, object]) -> ValidationReport:
     """Проверить три ручных эталона без автоподстановки чисел."""
 
@@ -147,7 +215,7 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
     elif key == "normalization_mode":
         if value not in ("auto", "manual"):
             return PendingChange(key, value, None, ("Неизвестный режим нормализации",))
-        updated = replace(
+        updated = fitness if value == fitness.normalization_mode else replace(
             fitness, normalization_mode=value,
             time_reference_s=None, length_reference_m=None,
             complexity_reference=None,
@@ -218,7 +286,7 @@ def build_penalty_controls(state: UIState) -> None:
             reset.disable().tooltip("Утверждённых коэффициентов пока нет (Q04-C)")
 
 
-def build_fitness_controls(state: UIState) -> None:
+def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать пресеты и веса без выдуманных значений для открытых решений."""
 
     with ui.expansion("Пресет и веса Fitness", value=True).classes("w-full"):
@@ -253,7 +321,8 @@ def build_fitness_controls(state: UIState) -> None:
                             return
                         pending = propose_fitness_change(state, "weights", tuple(draft))
                         error_label.set_text("; ".join(pending.errors))
-                        apply_setting_change(state, pending)
+                        if not pending.errors:
+                            submit(pending, render_weights, lambda: None)
 
                     for index, name in enumerate(("Время T", "Длина L", "Сложность C")):
                         ui.number(
@@ -264,12 +333,22 @@ def build_fitness_controls(state: UIState) -> None:
                     ui.label("Выберите пресет; веса пока не заданы.").classes("panel-copy")
 
         def select_preset(value: object) -> None:
+            if value == state.config.fitness.preset:
+                error_label.set_text("")
+                render_weights()
+                return
             pending = propose_fitness_change(state, "preset", value)
             error_label.set_text("; ".join(pending.errors))
-            if apply_setting_change(state, pending):
-                render_weights()
+            if not pending.errors:
+                old = state.config.fitness.preset
+                submit(pending, lambda: restore_preset(old), render_weights)
 
-        ui.select(
+        def restore_preset(old: str | None) -> None:
+            preset_select.set_value(old)
+            render_weights()
+            error_label.set_text("")
+
+        preset_select = ui.select(
             {"fast": "Быстрый", "short": "Экономичный", "easy": "Лёгкий",
              "custom": "Пользовательский"},
             label="Пресет", value=state.config.fitness.preset,
@@ -289,7 +368,7 @@ def build_fitness_controls(state: UIState) -> None:
         ).classes("setting-field")
 
 
-def build_normalization_controls(state: UIState) -> None:
+def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать выбор режима и ручные эталоны с единицами."""
 
     with ui.expansion("Нормализация и эталоны", value=True).classes("w-full"):
@@ -321,10 +400,17 @@ def build_normalization_controls(state: UIState) -> None:
                     def change_reference(key: str, value: object) -> None:
                         pending = propose_fitness_change(state, key, value)
                         error_label.set_text("; ".join(pending.errors))
-                        apply_setting_change(state, pending)
+                        if not pending.errors:
+                            old = getattr(state.config.fitness, key)
+                            submit(
+                                pending,
+                                lambda field=key, previous=old: reference_widgets[field].set_value(previous),
+                                lambda: None,
+                            )
 
+                    reference_widgets: dict[str, Number] = {}
                     for key, label in fields:
-                        ui.number(
+                        reference_widgets[key] = ui.number(
                             label, value=getattr(fitness, key), min=0, step=1,
                             on_change=lambda event, field=key: change_reference(field, event.value),
                         ).props("outlined dense").classes("setting-field")
@@ -332,12 +418,22 @@ def build_normalization_controls(state: UIState) -> None:
                     ui.label("Выберите режим нормализации.").classes("panel-copy")
 
         def select_mode(value: object) -> None:
+            if value == state.config.fitness.normalization_mode:
+                error_label.set_text("")
+                render_references()
+                return
             pending = propose_fitness_change(state, "normalization_mode", value)
             error_label.set_text("; ".join(pending.errors))
-            if apply_setting_change(state, pending):
-                render_references()
+            if not pending.errors:
+                old = state.config.fitness.normalization_mode
+                submit(pending, lambda: restore_mode(old), render_references)
 
-        ui.select(
+        def restore_mode(old: str | None) -> None:
+            mode_select.set_value(old)
+            render_references()
+            error_label.set_text("")
+
+        mode_select = ui.select(
             {"auto": "По начальной популяции", "manual": "Вручную"},
             label="Режим нормализации", value=state.config.fitness.normalization_mode,
             on_change=lambda event: select_mode(event.value),
@@ -346,7 +442,7 @@ def build_normalization_controls(state: UIState) -> None:
         render_references()
 
 
-def build_ga_controls(state: UIState, on_change: Callable[[PendingChange], None]) -> None:
+def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
     """Построить поля ГА; виджеты лишь предлагают изменения состояния."""
 
     widgets: dict[str, Number] = {}
@@ -356,7 +452,15 @@ def build_ga_controls(state: UIState, on_change: Callable[[PendingChange], None]
         pending = propose_setting_change(state, key, value)
         error_label.set_text("; ".join(pending.errors))
         if not pending.errors:
-            on_change(pending)
+            field_name = PERCENT_FIELDS.get(key, key)
+            old = getattr(state.config.ga, field_name)
+            if key in PERCENT_FIELDS:
+                old *= 100
+            if key == "mutation_method":
+                restore = lambda previous=old: mutation_select.set_value(previous)
+            else:
+                restore = lambda field=key, previous=old: widgets[field].set_value(previous)
+            submit(pending, restore, lambda: None)
 
     def add_number(
         key: str, label: str, value: float | int | None, *,
@@ -389,7 +493,7 @@ def build_ga_controls(state: UIState, on_change: Callable[[PendingChange], None]
         add_number("seed", "Seed (можно оставить пустым)", ga.seed)
 
     with ui.expansion("Операторы и ограничения", value=True).classes("w-full"):
-        ui.select({"A": "A — заменить участок", "B": "B — через промежуточную точку"},
+        mutation_select = ui.select({"A": "A — заменить участок", "B": "B — через промежуточную точку"},
                   label="Метод мутации", value=ga.mutation_method,
                   on_change=lambda event: change("mutation_method", event.value)
                   ).props("outlined dense").classes("setting-field")
@@ -418,15 +522,17 @@ def build_ga_controls(state: UIState, on_change: Callable[[PendingChange], None]
         ui.label("Эти значения не подставляются автоматически.").classes("panel-copy")
 
     def reset() -> None:
-        reset_ga_defaults(state)
-        defaults = state.config.ga
-        for key, widget in widgets.items():
-            if key in PERCENT_FIELDS:
-                value = getattr(defaults, PERCENT_FIELDS[key]) * 100
-            else:
-                value = getattr(defaults, key)
-            widget.set_value(value)
-        error_label.set_text("")
+        pending = PendingChange("ga_reset", None, replace(state.config, ga=GAConfig()))
+
+        def update_widgets() -> None:
+            defaults = state.config.ga
+            for key, widget in widgets.items():
+                value = getattr(defaults, PERCENT_FIELDS.get(key, key))
+                widget.set_value(value * 100 if key in PERCENT_FIELDS else value)
+            mutation_select.set_value(defaults.mutation_method)
+            error_label.set_text("")
+
+        submit(pending, lambda: None, update_widgets)
 
     ui.button("Сбросить параметры ГА", on_click=reset, icon="restart_alt").props(
         "outline"

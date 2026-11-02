@@ -41,6 +41,10 @@ def build_results_panel(state: UIState) -> None:
     """Разместить будущие карточки, историю и четыре пустых графика."""
 
     ui.label("Результаты").classes("panel-heading")
+    if state.change_demo_mode:
+        ui.label("ДЕМО: искусственная история только для проверки подтверждения.").classes(
+            "setting-error"
+        )
     with ui.element("section").classes("empty-block"):
         ui.label("Расчёты ещё не выполнены").classes("panel-heading")
         ui.label("После запуска здесь появятся лучшие маршруты и их метрики.").classes(
