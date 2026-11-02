@@ -1,8 +1,50 @@
 """Стартовая конфигурация и её проверка без зависимости от UI."""
 
+from dataclasses import dataclass
 from math import isclose, isfinite
 
 from algorithm.models import AppConfig, FitnessConfig, GAConfig, ValidationReport
+
+
+@dataclass(frozen=True, slots=True)
+class PenaltyDefinition:
+    """Позиция штрафа и статус доступности признака в текущей модели."""
+
+    id: str
+    name: str
+    evidence_note: str
+    feature_available: bool | None = None
+
+
+_PENALTY_CATALOG = (
+    PenaltyDefinition("P01", "Правый поворот", "Геометрия направления; угол и пороги ещё не согласованы."),
+    PenaltyDefinition("P02", "Левый поворот", "Геометрия направления; отдельно проверять запрет поворота."),
+    PenaltyDefinition("P03", "Разворот", "Геометрия и разрешённость; порог ещё не согласован."),
+    PenaltyDefinition("P04", "Смена полосы", "Реальная смена полосы не наблюдается в графе уровня дорог; нужен согласованный признак.", False),
+    PenaltyDefinition("P05", "Нерегулируемый перекрёсток", "Отсутствие тега светофора не доказывает нерегулируемость."),
+    PenaltyDefinition("P06", "Кольцевой перекрёсток", "Нужен признак кольца и одно событие на проезд, не на ребро."),
+    PenaltyDefinition("P07", "Светофор", "Нужна привязка объекта к направлению и исключение двойного учёта."),
+    PenaltyDefinition("P08", "STOP", "Нужен подтверждённый знак, применимый к направлению движения."),
+    PenaltyDefinition("P09", "«Уступи дорогу»", "Нужен подтверждённый знак, применимый к направлению движения."),
+    PenaltyDefinition("P10", "Пересечение трамвайных путей", "Нужен проезд через пути на одном уровне, не мост."),
+    PenaltyDefinition("P11", "Железнодорожный переезд", "Нужен подтверждённый объект; одно событие на переезд."),
+    PenaltyDefinition("P12", "Многополосный участок", "Нужны подтверждённое число полос и единица начисления."),
+    PenaltyDefinition("P13", "Узкая жилая улица", "Нужен признак узости; название улицы недостаточно."),
+    PenaltyDefinition("P14", "Школьная зона", "Нужна связь зоны с дорогой; близости школы недостаточно."),
+    PenaltyDefinition("P15", "Искусственная неровность", "Нужен подтверждённый объект без повторного подсчёта."),
+)
+
+
+def penalty_catalog() -> tuple[PenaltyDefinition, ...]:
+    """Вернуть утверждённый состав P01–P15 без числовых коэффициентов."""
+
+    return _PENALTY_CATALOG
+
+
+def approved_penalty_defaults() -> tuple[float, ...] | None:
+    """Вернуть утверждённые числа, когда Q04-C будет решён."""
+
+    return None
 
 
 def default_config() -> AppConfig:

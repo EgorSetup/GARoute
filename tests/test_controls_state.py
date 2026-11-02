@@ -6,8 +6,10 @@ from interface.controls import (
     propose_fitness_change,
     propose_setting_change,
     reset_ga_defaults,
+    reset_approved_penalties,
     validate_scales,
 )
+from config import penalty_catalog
 
 
 def test_config_roundtrip() -> None:
@@ -90,3 +92,20 @@ def test_auto_scales_pending() -> None:
     assert state.config.fitness.length_reference_m is None
     assert state.config.fitness.complexity_reference is None
     assert propose_fitness_change(state, "time_reference_s", 600).errors
+
+
+def test_exact_fifteen_penalties() -> None:
+    catalog = penalty_catalog()
+    assert tuple(item.id for item in catalog) == tuple(f"P{i:02d}" for i in range(1, 16))
+    assert len({item.name for item in catalog}) == 15
+    assert all(item.evidence_note for item in catalog)
+    assert catalog[3].name == "Смена полосы"
+    assert catalog[3].feature_available is False
+
+
+def test_unknown_penalty_not_zero() -> None:
+    state = UIState()
+    assert state.config.fitness.penalties is None
+    assert not reset_approved_penalties(state)
+    assert state.config.fitness.penalties is None
+    assert not state.config.fitness.penalties == (0.0,) * 15

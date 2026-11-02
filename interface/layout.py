@@ -7,7 +7,7 @@ from nicegui.elements.tabs import TabPanels, Tabs
 
 from interface.controls import (
     UIState, apply_setting_change, build_fitness_controls, build_ga_controls,
-    build_normalization_controls,
+    build_normalization_controls, build_penalty_controls,
 )
 from interface.map_view import MapHandle, create_map
 
@@ -69,6 +69,8 @@ STYLE = """
   .tab-content { padding: 20px; }
   .setting-field { width: 100%; margin-top: 12px; }
   .setting-error { color: #a73835; font: 500 12px/1.4 system-ui, sans-serif; }
+  .penalty-card { margin-top: 10px; box-shadow: none; border: 1px solid var(--line); }
+  .penalty-title { font: 650 13px/1.3 system-ui, sans-serif; }
   .right-panel .q-expansion-item { border-bottom: 1px solid var(--line); }
   .empty-block { margin-top: 18px; padding: 18px; border: 1px dashed #b9cbd4;
     border-radius: 9px; background: #f7fafb; }
@@ -138,6 +140,7 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
                 build_ga_controls(state, lambda pending: apply_setting_change(state, pending))
                 build_fitness_controls(state)
                 build_normalization_controls(state)
+                build_penalty_controls(state)
             with ui.tab_panel(results).classes("tab-content"):
                 ui.label("Результаты").classes("panel-heading")
                 with ui.element("div").classes("empty-block"):

@@ -8,7 +8,7 @@ from nicegui import ui
 from nicegui.elements.number import Number
 
 from algorithm.models import AppConfig, GAConfig, ValidationReport
-from config import default_config, validate_config
+from config import approved_penalty_defaults, default_config, penalty_catalog, validate_config
 
 
 @dataclass(slots=True)
@@ -162,6 +162,51 @@ def reset_ga_defaults(state: UIState) -> None:
     """Сбросить лишь принятые настройки ГА, сохранив будущие настройки Fitness."""
 
     state.config = replace(state.config, ga=GAConfig())
+
+
+def reset_approved_penalties(state: UIState) -> bool:
+    """Сбросить только к утверждённым коэффициентам; пока их нет, ничего не менять."""
+
+    defaults = approved_penalty_defaults()
+    if defaults is None:
+        return False
+    fitness = replace(state.config.fitness, penalties=defaults)
+    candidate = replace(state.config, fitness=fitness)
+    if validate_config(candidate).errors:
+        return False
+    state.config = candidate
+    return True
+
+
+def build_penalty_controls(state: UIState) -> None:
+    """Показать 15 штрафов и неизвестность коэффициентов и признаков."""
+
+    with ui.expansion("Штрафы сложности · P01–P15", value=False).classes("w-full"):
+        ui.label("Состав утверждён; числовые коэффициенты и часть детекторов ожидают Q04-C.").classes(
+            "panel-copy"
+        )
+        ui.label("Неизвестный признак не означает нулевую сложность маршрута.").classes(
+            "setting-error"
+        )
+        values = state.config.fitness.penalties
+        for index, item in enumerate(penalty_catalog()):
+            value = values[index] if values is not None and index < len(values) else None
+            with ui.card().classes("w-full penalty-card"):
+                ui.label(f"{item.id} · {item.name}").classes("penalty-title")
+                ui.label(item.evidence_note).classes("panel-copy")
+                if item.feature_available is False:
+                    ui.label("Признак недоступен в графе уровня дорог.").classes("setting-error")
+                else:
+                    ui.label("Признак требует формализации и проверки.").classes("panel-copy")
+                ui.number("Штраф, баллы", value=value).props("outlined dense disable").classes(
+                    "setting-field"
+                )
+                if value is None:
+                    ui.label("Коэффициент не утверждён.").classes("setting-error")
+        reset = ui.button("Сбросить к утверждённым", on_click=lambda: reset_approved_penalties(state))
+        reset.props("outline").classes("w-full")
+        if approved_penalty_defaults() is None:
+            reset.disable().tooltip("Утверждённых коэффициентов пока нет (Q04-C)")
 
 
 def build_fitness_controls(state: UIState) -> None:
