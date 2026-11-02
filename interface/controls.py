@@ -8,8 +8,9 @@ import networkx as nx
 from nicegui import ui
 from nicegui.elements.number import Number
 
+from algorithm.evaluation.penalties import PenaltyBreakdown
 from algorithm.models import AppConfig, GAConfig, RouteContext, ValidationReport
-from config import approved_penalty_defaults, default_config, penalty_catalog, validate_config
+from config import default_config, penalty_catalog, validate_config, working_penalty_defaults
 from data.osm_loader import RoadData
 from data.restrictions import TurnRules
 from data.road_graph import NormalizedRoadData, check_reachability
@@ -29,6 +30,8 @@ class UIState:
     endpoint_a: object | None = None
     endpoint_b: object | None = None
     initial_population: object | None = None
+    initial_complexities: tuple[PenaltyBreakdown, ...] = ()
+    refresh_population_results: Callable[[], None] | None = None
     clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
@@ -220,8 +223,11 @@ def confirm_change(state: UIState) -> UIState:
     state.highlighted_route_ids.clear()
     state.playback = PlaybackState()
     state.initial_population = None
+    state.initial_complexities = ()
     if state.clear_population_layers is not None:
         state.clear_population_layers()
+    elif state.refresh_population_results is not None:
+        state.refresh_population_results()
     cancel_change(state)
     return state
 
@@ -290,31 +296,49 @@ def reset_ga_defaults(state: UIState) -> None:
     state.config = replace(state.config, ga=GAConfig())
 
 
-def reset_approved_penalties(state: UIState) -> bool:
-    """Сбросить только к утверждённым коэффициентам; пока их нет, ничего не менять."""
+def propose_penalty_change(state: UIState, index: int, value: object) -> PendingChange:
+    """Проверить коэффициент, оставив подтверждение общих условий общему механизму."""
 
-    defaults = approved_penalty_defaults()
-    if defaults is None:
-        return False
-    fitness = replace(state.config.fitness, penalties=defaults)
-    candidate = replace(state.config, fitness=fitness)
-    if validate_config(candidate).errors:
-        return False
-    state.config = candidate
-    return True
+    if type(index) is not int or not 0 <= index < len(penalty_catalog()):
+        return PendingChange("penalties", value, None, ("Неизвестный штраф",))
+    number = _numeric_input(value)
+    if number is None:
+        return PendingChange("penalties", value, None, ("Введите конечное число",))
+    values = list(state.config.fitness.penalties or working_penalty_defaults())
+    values[index] = number
+    candidate = replace(state.config, fitness=replace(state.config.fitness, penalties=tuple(values)))
+    errors = validate_config(candidate).errors
+    return PendingChange("penalties", number, candidate if not errors else None, errors)
 
 
-def build_penalty_controls(state: UIState) -> None:
-    """Показать 15 штрафов и неизвестность коэффициентов и признаков."""
+def propose_penalty_reset(state: UIState) -> PendingChange:
+    """Предложить возврат к рабочим Q04 VERIFY без немедленной очистки P0."""
+
+    defaults = working_penalty_defaults()
+    candidate = replace(state.config, fitness=replace(state.config.fitness, penalties=defaults))
+    return PendingChange("penalties_reset", defaults, candidate)
+
+
+def build_penalty_controls(state: UIState, submit: SubmitChange) -> None:
+    """Показать рабочие коэффициенты, ограничения и подтверждаемое изменение."""
 
     with ui.expansion("Штрафы сложности · P01–P15", value=False).classes("w-full"):
-        ui.label("Состав утверждён; числовые коэффициенты и часть детекторов ожидают Q04-C.").classes(
+        ui.label("Рабочие коэффициенты Q04 VERIFY; начисляются только подтверждённые события.").classes(
             "panel-copy"
         )
         ui.label("Неизвестный признак не означает нулевую сложность маршрута.").classes(
             "setting-error"
         )
         values = state.config.fitness.penalties
+        error_label = ui.label("").classes("setting-error")
+        widgets: dict[int, Number] = {}
+
+        def change(index: int, value: object) -> None:
+            pending = propose_penalty_change(state, index, value)
+            error_label.set_text("; ".join(pending.errors))
+            if not pending.errors:
+                old = state.config.fitness.penalties[index]
+                submit(pending, lambda: widgets[index].set_value(old), lambda: None)
         for index, item in enumerate(penalty_catalog()):
             value = values[index] if values is not None and index < len(values) else None
             with ui.card().classes("w-full penalty-card"):
@@ -323,16 +347,22 @@ def build_penalty_controls(state: UIState) -> None:
                 if item.feature_available is False:
                     ui.label("Признак недоступен в графе уровня дорог.").classes("setting-error")
                 else:
-                    ui.label("Признак требует формализации и проверки.").classes("panel-copy")
-                ui.number("Штраф, баллы", value=value).props("outlined dense disable").classes(
-                    "setting-field"
-                )
-                if value is None:
-                    ui.label("Коэффициент не утверждён.").classes("setting-error")
-        reset = ui.button("Сбросить к утверждённым", on_click=lambda: reset_approved_penalties(state))
-        reset.props("outline").classes("w-full")
-        if approved_penalty_defaults() is None:
-            reset.disable().tooltip("Утверждённых коэффициентов пока нет (Q04-C)")
+                    ui.label("Нужен подтверждённый OSM-признак; пробелы видны в результатах.").classes("panel-copy")
+                widgets[index] = ui.number(
+                    f"Баллы (0–{item.maximum_points:g})", value=value,
+                    min=0, max=item.maximum_points, step=0.5,
+                    on_change=lambda event, i=index: change(i, event.value),
+                ).props("outlined dense").classes("setting-field")
+
+        def reset() -> None:
+            pending = propose_penalty_reset(state)
+            def update_widgets() -> None:
+                for index, widget in widgets.items():
+                    widget.set_value(state.config.fitness.penalties[index])
+                error_label.set_text("")
+            submit(pending, lambda: None, update_widgets)
+
+        ui.button("Сбросить к рабочим Q04 VERIFY", on_click=reset).props("outline").classes("w-full")
 
 
 def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:

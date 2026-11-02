@@ -3,7 +3,7 @@
 from dataclasses import replace
 from math import inf, nan
 
-from config import default_config, validate_config
+from config import default_config, validate_config, working_penalty_defaults
 
 
 def test_known_defaults() -> None:
@@ -64,7 +64,7 @@ def test_unresolved_not_defaulted() -> None:
     assert config.ga.stagnation_window == 10
     assert config.fitness.preset is None
     assert config.fitness.weights is None
-    assert config.fitness.penalties is None
+    assert config.fitness.penalties == working_penalty_defaults()
     assert config.fitness.time_reference_s is None
     assert report.unresolved
     assert not report.ready_for_run

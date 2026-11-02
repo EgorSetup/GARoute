@@ -59,43 +59,49 @@ class PenaltyDefinition:
     name: str
     evidence_note: str
     feature_available: bool | None = None
+    working_points: float | None = None
+    maximum_points: float | None = None
 
 
 _PENALTY_CATALOG = (
-    PenaltyDefinition("P01", "Правый поворот", "Геометрия направления; угол и пороги ещё не согласованы."),
-    PenaltyDefinition("P02", "Левый поворот", "Геометрия направления; отдельно проверять запрет поворота."),
-    PenaltyDefinition("P03", "Разворот", "Геометрия и разрешённость; порог ещё не согласован."),
-    PenaltyDefinition("P04", "Смена полосы", "Реальная смена полосы не наблюдается в графе уровня дорог; нужен согласованный признак.", False),
-    PenaltyDefinition("P05", "Нерегулируемый перекрёсток", "Отсутствие тега светофора не доказывает нерегулируемость."),
-    PenaltyDefinition("P06", "Кольцевой перекрёсток", "Нужен признак кольца и одно событие на проезд, не на ребро."),
-    PenaltyDefinition("P07", "Светофор", "Нужна привязка объекта к направлению и исключение двойного учёта."),
-    PenaltyDefinition("P08", "STOP", "Нужен подтверждённый знак, применимый к направлению движения."),
-    PenaltyDefinition("P09", "«Уступи дорогу»", "Нужен подтверждённый знак, применимый к направлению движения."),
-    PenaltyDefinition("P10", "Пересечение трамвайных путей", "Нужен проезд через пути на одном уровне, не мост."),
-    PenaltyDefinition("P11", "Железнодорожный переезд", "Нужен подтверждённый объект; одно событие на переезд."),
-    PenaltyDefinition("P12", "Многополосный участок", "Нужны подтверждённое число полос и единица начисления."),
-    PenaltyDefinition("P13", "Узкая жилая улица", "Нужен признак узости; название улицы недостаточно."),
-    PenaltyDefinition("P14", "Школьная зона", "Нужна связь зоны с дорогой; близости школы недостаточно."),
-    PenaltyDefinition("P15", "Искусственная неровность", "Нужен подтверждённый объект без повторного подсчёта."),
+    PenaltyDefinition("P01", "Правый поворот", "Касательные разных OSM way на перекрёстке; Q04 VERIFY.", None, 2, 10),
+    PenaltyDefinition("P02", "Левый поворот", "Касательные разных OSM way на перекрёстке; Q04 VERIFY.", None, 5, 15),
+    PenaltyDefinition("P03", "Разворот", "Поворот ≥150° на перекрёстке; Q04 VERIFY.", None, 12, 30),
+    PenaltyDefinition("P04", "Смена полосы", "Фактическая смена полосы не наблюдается в графе дорог.", False, 10, 20),
+    PenaltyDefinition("P05", "Нерегулируемый перекрёсток", "Отсутствие светофора не доказывает нерегулируемость; UNKNOWN.", None, 3, 15),
+    PenaltyDefinition("P06", "Кольцевой перекрёсток", "Один непрерывный проезд junction=roundabout; Q04 VERIFY.", None, 4, 15),
+    PenaltyDefinition("P07", "Светофор", "Узел highway=traffic_signals с подтверждённым направлением.", None, 3, 15),
+    PenaltyDefinition("P08", "STOP", "Узел highway=stop с подтверждённым направлением.", None, 5, 20),
+    PenaltyDefinition("P09", "«Уступи дорогу»", "Узел highway=give_way с подтверждённым направлением.", None, 3, 15),
+    PenaltyDefinition("P10", "Пересечение трамвайных путей", "Узел tram_level_crossing без конфликта уровня; VERIFY.", None, 5, 20),
+    PenaltyDefinition("P11", "Железнодорожный переезд", "Узел railway=level_crossing без конфликта уровня.", None, 8, 25),
+    PenaltyDefinition("P12", "Многополосный участок", "≥3 полос в направлении движения; за 100 м.", None, 0.5, 5),
+    PenaltyDefinition("P13", "Узкая жилая улица", "Жилая дорога с шириной <3,5 м; за 100 м.", None, 2, 10),
+    PenaltyDefinition("P14", "Школьная зона", "Один непрерывный участок hazard=school_zone.", None, 5, 20),
+    PenaltyDefinition("P15", "Искусственная неровность", "Узел traffic_calming=bump/hump/table/cushion.", None, 2, 10),
 )
 
 
 def penalty_catalog() -> tuple[PenaltyDefinition, ...]:
-    """Вернуть утверждённый состав P01–P15 без числовых коэффициентов."""
+    """Вернуть состав P01–P15 и рабочие числовые пределы Q04 VERIFY."""
 
     return _PENALTY_CATALOG
 
 
-def approved_penalty_defaults() -> tuple[float, ...] | None:
-    """Вернуть утверждённые числа, когда Q04-C будет решён."""
+def working_penalty_defaults() -> tuple[float, ...]:
+    """Рабочие баллы Q04 VERIFY, отдельно от исторически утверждённых чисел."""
 
-    return None
+    return tuple(item.working_points for item in _PENALTY_CATALOG)
+
+
+def working_penalty_maxima() -> tuple[float, ...]:
+    return tuple(item.maximum_points for item in _PENALTY_CATALOG)
 
 
 def default_config() -> AppConfig:
-    """Создать настройки только с утверждёнными стартовыми числами."""
+    """Создать настройки с утверждёнными и явно помеченными VERIFY значениями."""
 
-    return AppConfig(ga=GAConfig(), fitness=FitnessConfig())
+    return AppConfig(ga=GAConfig(), fitness=FitnessConfig(penalties=working_penalty_defaults()))
 
 
 def _integer_at_least(value: object, minimum: int) -> bool:
@@ -176,11 +182,13 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
         errors.append("weights: нужны три неотрицательных конечных веса с суммой 1")
 
     if config.penalties is None:
-        unresolved.append("Q04-C: штрафы P01–P15 не согласованы")
+        unresolved.append("Штрафы P01–P15 не заданы")
     elif len(config.penalties) != 15 or any(
         not _finite_number(value) or value < 0 for value in config.penalties
     ):
         errors.append("penalties: нужны 15 неотрицательных конечных значений")
+    elif any(value > maximum for value, maximum in zip(config.penalties, working_penalty_maxima())):
+        errors.append("penalties: значение превышает рабочий предел Q04 VERIFY")
 
     if config.normalization_mode is None:
         unresolved.append("Режим нормализации не выбран")

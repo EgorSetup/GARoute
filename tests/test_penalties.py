@@ -6,8 +6,10 @@ from dataclasses import replace
 
 from algorithm.evaluation.penalties import (
     ABSENT, PRESENT, UNKNOWN, UNSUPPORTED, PENALTY_IDS,
-    PenaltyPolicy, extract_penalty_events,
+    PenaltyEvent, PenaltyEvents, PenaltyPolicy, calculate_complexity,
+    calculate_penalties, extract_penalty_events,
 )
+from config import working_penalty_defaults
 from algorithm.models import RoadEdge, Route, RouteContext
 from data.restrictions import TurnRules
 
@@ -36,6 +38,34 @@ def fixture_road(nodes, edges, *, extra_edges=(), node_tags=None):
 
 def observations(result, category, status=PRESENT):
     return [item for item in result.observations if item.category == category and item.status == status]
+
+
+def test_weighted_sum_breakdown_and_unknown():
+    events = PenaltyEvents((
+        PenaltyEvent("P01", PRESENT, "osm:node:1", 2, "turn"),
+        PenaltyEvent("P12", PRESENT, "osm:way:2", 3.5, "lanes+length"),
+        PenaltyEvent("P05", UNKNOWN, "osm:node:3", 0, "missing control"),
+        PenaltyEvent("P04", UNSUPPORTED, None, 0, "road-level graph"),
+    ))
+    breakdown = calculate_penalties(events, working_penalty_defaults())
+    assert breakdown.lines[0].subtotal == 4
+    assert breakdown.lines[11].subtotal == 1.75
+    assert calculate_complexity(breakdown) == 5.75
+    assert len(breakdown.uncertain) == 2
+    assert breakdown.lines[4].subtotal == 0
+    assert breakdown.lines[4].uncertain[0].status == UNKNOWN
+
+
+def test_invalid_penalty_values_and_uncertain_quantity():
+    defaults = working_penalty_defaults()
+    with pytest.raises(ValueError):
+        calculate_penalties(PenaltyEvents(()), defaults[:-1])
+    with pytest.raises(ValueError):
+        calculate_penalties(PenaltyEvents(()), (11, *defaults[1:]))
+    with pytest.raises(ValueError):
+        calculate_penalties(PenaltyEvents((
+            PenaltyEvent("P05", UNKNOWN, None, 1, "missing"),
+        )), defaults)
 
 
 def test_fifteen_categories_and_unknown_lane_change():

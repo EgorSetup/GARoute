@@ -217,7 +217,7 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
                 build_ga_controls(state, submit)
                 build_fitness_controls(state, submit)
                 build_normalization_controls(state, submit)
-                build_penalty_controls(state)
+                build_penalty_controls(state, submit)
             with ui.tab_panel(results).classes("tab-content"):
                 build_results_panel(state)
     return tabs, panels

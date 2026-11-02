@@ -15,6 +15,7 @@ from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
 from algorithm.genetic.initialization import generate_initial_population, production_weight_strategy
+from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.models import Route, RouteContext
 from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
@@ -167,6 +168,9 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 map_element.remove_layer(layer)
             population_layers.clear()
             state.initial_population = None
+            state.initial_complexities = ()
+            if state.refresh_population_results is not None:
+                state.refresh_population_results()
             if not state.demo_mode:
                 population_label.set_text("P0 ещё не сформирована")
 
@@ -271,7 +275,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     graph = state.routing_graph
                     roads = state.normalized_roads
                     start, end = state.endpoint_a, state.endpoint_b
-                    config = state.config.ga
+                    app_config = state.config
+                    config = app_config.ga
                     context = RouteContext(graph, start, end, state.turn_rules)
                     try:
                         result = await asyncio.to_thread(
@@ -282,14 +287,36 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         population_label.set_text(f"P0 не сформирована: {error}")
                         p0_button.enable()
                         return
-                    if (state.endpoint_a, state.endpoint_b, state.config.ga) != (start, end, config):
+                    if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
+                        p0_button.enable()
+                        return
+                    breakdowns = ()
+                    complexity_error = None
+                    if result.error is None and app_config.fitness.penalties is not None:
+                        def evaluate_p0():
+                            policy = PenaltyPolicy(roads.edges)
+                            return tuple(calculate_penalties(
+                                extract_penalty_events(route, context, policy),
+                                app_config.fitness.penalties,
+                            ) for route in result.population)
+                        try:
+                            breakdowns = await asyncio.to_thread(evaluate_p0)
+                        except (ValueError, KeyError, OverflowError) as error:
+                            complexity_error = str(error)
+                    if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
                         p0_button.enable()
                         return
                     clear_population()
                     state.initial_population = result
+                    state.initial_complexities = breakdowns
                     if result.error is None:
                         population_layers.extend(render_population(map_element, result.population, roads))
-                    population_label.set_text(population_status_text(result))
+                    status = population_status_text(result)
+                    if complexity_error is not None:
+                        status += f" C не вычислена: {complexity_error}."
+                    population_label.set_text(status)
+                    if state.refresh_population_results is not None:
+                        state.refresh_population_results()
                     p0_button.enable()
 
                 p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")

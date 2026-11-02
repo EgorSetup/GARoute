@@ -133,7 +133,7 @@ class FitnessConfig:
 
     preset: str | None = None
     weights: tuple[float, float, float] | None = None  # T, L, C
-    penalties: tuple[float, ...] | None = None  # P01–P15, OPEN Q04-C
+    penalties: tuple[float, ...] | None = None  # P01–P15, рабочие Q04 VERIFY в default_config
     normalization_mode: str | None = None
     time_reference_s: float | None = None
     length_reference_m: float | None = None

@@ -1,7 +1,7 @@
 """Наблюдаемые события сложности P01–P15 без подстановки отсутствующих фактов."""
 
 from dataclasses import dataclass
-from math import isfinite
+from math import fsum, isfinite
 import re
 from typing import Mapping
 
@@ -9,6 +9,7 @@ from pyproj import Geod
 
 from algorithm.genetic.validation import validate_route
 from algorithm.models import EdgeId, RoadEdge, Route, RouteContext
+from config import working_penalty_maxima
 
 
 PENALTY_IDS = tuple(f"P{index:02d}" for index in range(1, 16))
@@ -45,7 +46,7 @@ class PenaltyEvent:
 
 @dataclass(frozen=True, slots=True)
 class PenaltyEvents:
-    """Реестр с отдельной неопределённостью; баллы добавит T04.03."""
+    """Реестр наблюдений с отдельной неопределённостью."""
 
     observations: tuple[PenaltyEvent, ...]
 
@@ -56,6 +57,70 @@ class PenaltyEvents:
     @property
     def uncertain(self) -> tuple[PenaltyEvent, ...]:
         return tuple(item for item in self.observations if item.status in (UNKNOWN, UNSUPPORTED))
+
+
+@dataclass(frozen=True, slots=True)
+class PenaltyLine:
+    """Одно слагаемое C с источниками и числом неопределённых наблюдений."""
+
+    category: str
+    quantity: float
+    coefficient: float
+    subtotal: float
+    confirmed: tuple[PenaltyEvent, ...]
+    uncertain: tuple[PenaltyEvent, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PenaltyBreakdown:
+    """Наблюдаемая сложность и её доказательства; unknown не означает ноль."""
+
+    lines: tuple[PenaltyLine, ...]
+    total: float
+
+    @property
+    def uncertain(self) -> tuple[PenaltyEvent, ...]:
+        return tuple(event for line in self.lines for event in line.uncertain)
+
+
+def calculate_penalties(events: PenaltyEvents, coefficients: tuple[float, ...]) -> PenaltyBreakdown:
+    """Начислить Q04 VERIFY только за подтверждённые факты P01–P15."""
+
+    maxima = working_penalty_maxima()
+    if len(coefficients) != len(PENALTY_IDS) or any(
+        type(value) not in (int, float) or not isfinite(value) or value < 0 or value > maximum
+        for value, maximum in zip(coefficients, maxima)
+    ):
+        raise ValueError("invalid penalty coefficients")
+    buckets: dict[str, list[PenaltyEvent]] = {category: [] for category in PENALTY_IDS}
+    for event in events.observations:
+        if (event.category not in buckets or event.status not in (PRESENT, ABSENT, UNKNOWN, UNSUPPORTED)
+                or type(event.quantity) not in (int, float) or not isfinite(event.quantity)
+                or event.quantity < 0 or (event.status != PRESENT and event.quantity != 0)):
+            raise ValueError("invalid penalty event")
+        buckets[event.category].append(event)
+    lines = []
+    for category, coefficient in zip(PENALTY_IDS, coefficients):
+        confirmed = tuple(event for event in buckets[category] if event.status == PRESENT)
+        uncertain = tuple(event for event in buckets[category] if event.status in (UNKNOWN, UNSUPPORTED))
+        quantity = fsum(event.quantity for event in confirmed)
+        subtotal = quantity * coefficient
+        if not isfinite(subtotal):
+            raise ValueError("penalty subtotal overflow")
+        lines.append(PenaltyLine(category, quantity, coefficient, subtotal, confirmed, uncertain))
+    return PenaltyBreakdown(tuple(lines), fsum(line.subtotal for line in lines))
+
+
+def calculate_complexity(breakdown: PenaltyBreakdown) -> float:
+    """Вернуть C_observed после проверки сохранённой детализации."""
+
+    if (tuple(line.category for line in breakdown.lines) != PENALTY_IDS
+            or not isfinite(breakdown.total) or breakdown.total < 0
+            or any(not isfinite(line.subtotal) or line.subtotal < 0 for line in breakdown.lines)
+            or not isfinite(fsum(line.subtotal for line in breakdown.lines))
+            or not abs(fsum(line.subtotal for line in breakdown.lines) - breakdown.total) <= 1e-9):
+        raise ValueError("invalid penalty breakdown")
+    return breakdown.total
 
 
 def _way_id(edge: RoadEdge) -> str:

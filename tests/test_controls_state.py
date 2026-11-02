@@ -6,7 +6,11 @@ from interface.controls import (
     propose_fitness_change,
     propose_setting_change,
     reset_ga_defaults,
-    reset_approved_penalties,
+    propose_penalty_change,
+    propose_penalty_reset,
+    request_condition_change,
+    cancel_change,
+    confirm_change,
     validate_scales,
 )
 from config import penalty_catalog
@@ -103,9 +107,25 @@ def test_exact_fifteen_penalties() -> None:
     assert catalog[3].feature_available is False
 
 
-def test_unknown_penalty_not_zero() -> None:
+def test_penalty_change_and_reset_use_confirmation() -> None:
     state = UIState()
-    assert state.config.fitness.penalties is None
-    assert not reset_approved_penalties(state)
-    assert state.config.fitness.penalties is None
-    assert not state.config.fitness.penalties == (0.0,) * 15
+    assert state.config.fitness.penalties[0] == 2
+    assert propose_penalty_change(state, 0, 11).errors
+    assert propose_penalty_change(state, 0, float("nan")).errors
+    state.initial_population = object()
+    pending = propose_penalty_change(state, 0, 4)
+    request_condition_change(state, pending)
+    assert state.config.fitness.penalties[0] == 2
+    assert state.pending_change == pending
+    cancel_change(state)
+    assert state.initial_population is not None
+    request_condition_change(state, pending)
+    confirm_change(state)
+    assert state.config.fitness.penalties[0] == 4
+    assert state.initial_population is None
+    state.initial_population = object()
+    request_condition_change(state, propose_penalty_reset(state))
+    assert state.config.fitness.penalties[0] == 4
+    confirm_change(state)
+    assert state.config.fitness.penalties[0] == 2
+    assert state.initial_population is None
