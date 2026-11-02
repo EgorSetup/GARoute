@@ -9,6 +9,7 @@ from nicegui import ui
 from nicegui.elements.number import Number
 
 from algorithm.evaluation.penalties import PenaltyBreakdown
+from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
 from algorithm.models import AppConfig, GAConfig, RouteContext, ValidationReport
 from config import default_config, penalty_catalog, validate_config, working_penalty_defaults
 from data.osm_loader import RoadData
@@ -31,7 +32,10 @@ class UIState:
     endpoint_b: object | None = None
     initial_population: object | None = None
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
+    initial_scales: NormalizationScales | None = None
+    initial_scale_error: str | None = None
     refresh_population_results: Callable[[], None] | None = None
+    refresh_normalization: Callable[[], None] | None = None
     clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
@@ -224,10 +228,14 @@ def confirm_change(state: UIState) -> UIState:
     state.playback = PlaybackState()
     state.initial_population = None
     state.initial_complexities = ()
+    state.initial_scales = None
+    state.initial_scale_error = None
     if state.clear_population_layers is not None:
         state.clear_population_layers()
     elif state.refresh_population_results is not None:
         state.refresh_population_results()
+    if state.clear_population_layers is None and state.refresh_normalization is not None:
+        state.refresh_normalization()
     cancel_change(state)
     return state
 
@@ -237,13 +245,7 @@ def validate_scales(values: tuple[object, object, object]) -> ValidationReport:
 
     if len(values) != 3:
         return ValidationReport(errors=("Нужны три эталона",))
-    names = ("Tref (с)", "Lref (м)", "Cref (баллы)")
-    errors = tuple(
-        f"{name}: требуется положительное конечное число"
-        for name, value in zip(names, values)
-        if (number := _numeric_input(value)) is None or number <= 0
-    )
-    return ValidationReport(errors=errors)
+    return validate_manual_scales(NormalizationScales(*values))
 
 
 def propose_fitness_change(state: UIState, key: str, value: object) -> PendingChange:
@@ -469,10 +471,19 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
                     ui.label("По P0: Tref=mean(T), Lref=mean(L), Cref=max(1, mean(C)).").classes(
                         "panel-copy"
                     )
-                    for key, label in fields:
-                        value = getattr(fitness, key)
-                        ui.label(f"{label}: {value:g}" if value is not None else
-                                 f"{label}: будет вычислено").classes("panel-copy")
+                    scales = state.initial_scales
+                    if scales is None:
+                        ui.label(state.initial_scale_error or "Будет вычислено после полной P0.").classes(
+                            "setting-error" if state.initial_scale_error else "panel-copy"
+                        )
+                    else:
+                        ui.label("Предварительно по P0; эталоны этого снимка не меняются при новых поколениях.").classes("panel-copy")
+                        for label, value in (("Tref, секунды", scales.time_s),
+                                             ("Lref, метры", scales.length_m),
+                                             ("Cref, баллы", scales.complexity)):
+                            ui.label(f"{label}: {value:.2f}").classes("panel-copy")
+                        if any(item.uncertain for item in state.initial_complexities):
+                            ui.label("Cref основан на C_observed: часть признаков неизвестна/недоступна.").classes("setting-error")
                 elif fitness.normalization_mode == "manual":
                     ui.label("Введите все три положительных эталона.").classes("panel-copy")
 
@@ -518,6 +529,7 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
             on_change=lambda event: select_mode(event.value),
         ).props("outlined dense").classes("setting-field")
         details = ui.column().classes("w-full")
+        state.refresh_normalization = render_references
         render_references()
 
 

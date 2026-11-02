@@ -16,7 +16,9 @@ from nicegui.elements.leaflet.leaflet import Leaflet
 
 from algorithm.genetic.initialization import generate_initial_population, production_weight_strategy
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
-from algorithm.models import Route, RouteContext
+from algorithm.evaluation.fitness import TimeModel, calculate_length, calculate_travel_time
+from algorithm.evaluation.normalization import compute_scales
+from algorithm.models import Route, RouteContext, RouteMetrics
 from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
@@ -169,8 +171,12 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
             population_layers.clear()
             state.initial_population = None
             state.initial_complexities = ()
+            state.initial_scales = None
+            state.initial_scale_error = None
             if state.refresh_population_results is not None:
                 state.refresh_population_results()
+            if state.refresh_normalization is not None:
+                state.refresh_normalization()
             if not state.demo_mode:
                 population_label.set_text("P0 ещё не сформирована")
 
@@ -292,15 +298,27 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         return
                     breakdowns = ()
                     complexity_error = None
+                    scales = None
+                    scale_error = None
                     if result.error is None and app_config.fitness.penalties is not None:
                         def evaluate_p0():
                             policy = PenaltyPolicy(roads.edges)
-                            return tuple(calculate_penalties(
+                            evaluated = tuple(calculate_penalties(
                                 extract_penalty_events(route, context, policy),
                                 app_config.fitness.penalties,
                             ) for route in result.population)
+                            time_model = TimeModel(roads.edges)
+                            try:
+                                metrics = tuple(RouteMetrics(
+                                    calculate_length(route, context, time_model),
+                                    calculate_travel_time(route, context, time_model),
+                                    item.total,
+                                ) for route, item in zip(result.population, evaluated))
+                                return evaluated, compute_scales(metrics), None
+                            except (ValueError, OverflowError) as error:
+                                return evaluated, None, f"Автоэталоны не вычислены: {error}"
                         try:
-                            breakdowns = await asyncio.to_thread(evaluate_p0)
+                            breakdowns, scales, scale_error = await asyncio.to_thread(evaluate_p0)
                         except (ValueError, KeyError, OverflowError) as error:
                             complexity_error = str(error)
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
@@ -309,6 +327,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     clear_population()
                     state.initial_population = result
                     state.initial_complexities = breakdowns
+                    state.initial_scales = scales
+                    state.initial_scale_error = scale_error
                     if result.error is None:
                         population_layers.extend(render_population(map_element, result.population, roads))
                     status = population_status_text(result)
@@ -317,6 +337,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     population_label.set_text(status)
                     if state.refresh_population_results is not None:
                         state.refresh_population_results()
+                    if state.refresh_normalization is not None:
+                        state.refresh_normalization()
                     p0_button.enable()
 
                 p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")
