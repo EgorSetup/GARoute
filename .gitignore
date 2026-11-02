@@ -1,0 +1,37 @@
+# Локальное окружение Python и результаты проверок
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Локальные настройки и секреты
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Временные выгрузки OSM, кэш и результаты запусков
+.cache/
+cache/
+data/cache/
+data/osm_cache/
+data/osm_downloads/
+outputs/tmp/
+outputs/runs/
+*.tmp
+*.log
+
+# Настройки редакторов и ОС
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
