@@ -85,6 +85,7 @@ STYLE = """
   .chart-list { margin-top: 12px; }
   .chart-placeholder { box-shadow: none; border: 1px dashed #b9cbd4;
     background: #f7fafb; min-height: 92px; }
+  .chart-enlarged { width: min(90vw, 850px); min-height: 320px; }
   @media (max-width: 1120px) {
     .workspace { grid-template-columns: 220px minmax(0, 1fr); height: auto; }
     .right-panel { grid-column: 1 / -1; min-height: 300px; }
