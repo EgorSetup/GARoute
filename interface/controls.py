@@ -11,7 +11,7 @@ from nicegui.elements.number import Number
 from algorithm.evaluation.penalties import PenaltyBreakdown
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
 from algorithm.models import AppConfig, GAConfig, RouteContext, ValidationReport
-from config import default_config, penalty_catalog, validate_config, working_penalty_defaults
+from config import PRESET_WEIGHTS, default_config, penalty_catalog, validate_config, working_penalty_defaults
 from data.osm_loader import RoadData
 from data.restrictions import TurnRules
 from data.road_graph import NormalizedRoadData, check_reachability
@@ -255,8 +255,7 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
     if key == "preset":
         if value not in ("fast", "short", "easy", "custom"):
             return PendingChange(key, value, None, ("Неизвестный пресет",))
-        fixed = {"fast": (1.0, 0.0, 0.0), "short": (0.0, 1.0, 0.0)}
-        weights = fixed.get(value, state.custom_weights if value == "custom" else None)
+        weights = PRESET_WEIGHTS.get(value, state.custom_weights if value == "custom" else None)
         updated = replace(fitness, preset=value, weights=weights)
     elif key == "weights":
         if fitness.preset != "custom":
@@ -382,16 +381,12 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
             details.clear()
             fitness = state.config.fitness
             with details:
-                if fitness.preset in ("fast", "short"):
+                if fitness.preset in PRESET_WEIGHTS:
+                    if fitness.preset == "easy":
+                        ui.label("Рабочие веса Q04 VERIFY; ограничения Лёгкого Q05 ещё открыты.").classes("setting-error")
                     for name, value in zip(("Время T", "Длина L", "Сложность C"), fitness.weights):
                         ui.label(f"{name}: {value * 100:g}%").classes("panel-copy")
                         ui.slider(min=0, max=100, value=value * 100).disable().classes("w-full")
-                elif fitness.preset == "easy":
-                    ui.label("Веса Лёгкого ещё не утверждены (Q04).").classes("panel-copy")
-                    for name in ("Время T", "Длина L", "Сложность C"):
-                        ui.number(name + ", %", value=None).props("outlined dense disable").classes(
-                            "setting-field"
-                        )
                 elif fitness.preset == "custom":
                     draft = [v * 100 for v in fitness.weights] if fitness.weights else [None] * 3
 

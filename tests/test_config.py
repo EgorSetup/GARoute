@@ -68,3 +68,9 @@ def test_unresolved_not_defaulted() -> None:
     assert config.fitness.time_reference_s is None
     assert report.unresolved
     assert not report.ready_for_run
+
+
+def test_fixed_preset_weights_cannot_be_overridden() -> None:
+    config = default_config()
+    invalid = replace(config, fitness=replace(config.fitness, preset="easy", weights=(0.2, 0.1, 0.7)))
+    assert any("фиксированные" in error for error in validate_config(invalid).errors)

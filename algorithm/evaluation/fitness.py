@@ -1,13 +1,69 @@
-"""Длина и время маршрута до добавления штрафов и общей Fitness."""
+"""Длина, время и одна формула безразмерной стоимости маршрута."""
 
 from dataclasses import dataclass, field
-from math import isfinite
+from math import fsum, isclose, isfinite
 from typing import Mapping
 
 from algorithm.genetic.validation import validate_route
-from algorithm.models import EdgeId, RoadEdge, Route, RouteContext
-from config import TRAFFIC_SPEED_FACTORS
+from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
+from algorithm.models import EdgeId, RoadEdge, Route, RouteContext, RouteMetrics
+from config import PRESET_WEIGHTS, TRAFFIC_SPEED_FACTORS
 from data.traffic import speed_factor
+
+
+Weights = tuple[float, float, float]
+
+
+def _finite_number(value: object) -> bool:
+    if type(value) not in (int, float):
+        return False
+    try:
+        return isfinite(value)
+    except OverflowError:
+        return False
+
+
+def _valid_weights(weights: object) -> bool:
+    return (
+        isinstance(weights, (tuple, list)) and len(weights) == 3
+        and all(_finite_number(value) and 0 <= value <= 1
+                for value in weights)
+        and isclose(fsum(weights), 1.0, rel_tol=0, abs_tol=1e-9)
+    )
+
+
+def resolve_preset(name: str, custom_weights: Weights | None = None) -> Weights:
+    """Вернуть веса T/L/C; готовые пресеты не принимают ручную подмену."""
+
+    if name in PRESET_WEIGHTS:
+        weights = PRESET_WEIGHTS[name]
+    elif name == "custom":
+        weights = custom_weights
+    else:
+        raise ValueError("unknown fitness preset")
+    if not _valid_weights(weights):
+        raise ValueError("invalid fitness weights")
+    return tuple(weights)
+
+
+def evaluate_cost(metrics: RouteMetrics, weights: Weights,
+                  scales: NormalizationScales) -> float:
+    """Вычислить J=wT·T/Tref+wL·L/Lref+wC·C/Cref; меньший J лучше."""
+
+    if not _valid_weights(weights):
+        raise ValueError("invalid fitness weights")
+    if validate_manual_scales(scales).errors:
+        raise ValueError("invalid normalization scales")
+    if (any(not _finite_number(value)
+            for value in (metrics.time_s, metrics.length_m, metrics.complexity))
+            or metrics.time_s <= 0 or metrics.length_m <= 0 or metrics.complexity < 0):
+        raise ValueError("invalid route metrics")
+    cost = fsum((weights[0] * metrics.time_s / scales.time_s,
+                 weights[1] * metrics.length_m / scales.length_m,
+                 weights[2] * metrics.complexity / scales.complexity))
+    if not isfinite(cost) or cost < 0:
+        raise ValueError("nonfinite fitness cost")
+    return cost
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,6 +50,13 @@ OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api"
 # Q02-C RESOLVED / VERIFY: рабочая таблица до сквозной проверки модели.
 TRAFFIC_SPEED_FACTORS = {level: (11 - level) / 10 for level in range(1, 11)}
 
+# T/L/C: Q04 VERIFY для Лёгкого; ограничения Q05 остаются отдельным решением.
+PRESET_WEIGHTS = {
+    "fast": (1.0, 0.0, 0.0),
+    "short": (0.0, 1.0, 0.0),
+    "easy": (0.15, 0.10, 0.75),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class PenaltyDefinition:
@@ -180,6 +187,11 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
         not _finite_number(value) or value < 0 for value in config.weights
     ) or not isclose(sum(config.weights), 1.0, abs_tol=1e-9):
         errors.append("weights: нужны три неотрицательных конечных веса с суммой 1")
+    elif config.preset in PRESET_WEIGHTS and any(
+        not isclose(actual, fixed, rel_tol=0, abs_tol=1e-9)
+        for actual, fixed in zip(config.weights, PRESET_WEIGHTS[config.preset])
+    ):
+        errors.append("weights: готовый пресет имеет фиксированные веса")
 
     if config.penalties is None:
         unresolved.append("Штрафы P01–P15 не заданы")
