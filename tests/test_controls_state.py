@@ -3,8 +3,10 @@
 from interface.controls import (
     UIState,
     apply_setting_change,
+    propose_fitness_change,
     propose_setting_change,
     reset_ga_defaults,
+    validate_scales,
 )
 
 
@@ -50,3 +52,41 @@ def test_bad_input_does_not_change_state() -> None:
     assert invalid.errors
     assert not apply_setting_change(state, invalid)
     assert state.config.ga.elite_count == 2
+
+
+def test_preset_locks_weights() -> None:
+    state = UIState()
+    assert apply_setting_change(state, propose_fitness_change(state, "preset", "fast"))
+    assert state.config.fitness.weights == (1.0, 0.0, 0.0)
+    assert propose_fitness_change(state, "weight_time", 40).errors
+    assert apply_setting_change(state, propose_fitness_change(state, "preset", "easy"))
+    assert state.config.fitness.weights is None
+    assert state.config.fitness.easy_length_delta is None
+    assert state.config.fitness.easy_time_delta is None
+
+    assert apply_setting_change(state, propose_fitness_change(state, "preset", "custom"))
+    assert apply_setting_change(state, propose_fitness_change(state, "weights", (20, 30, 50)))
+    assert state.config.fitness.weights == (0.2, 0.3, 0.5)
+    assert propose_fitness_change(state, "weights", (20, 30, 40)).errors
+    assert state.config.fitness.weights == (0.2, 0.3, 0.5)
+
+
+def test_manual_scales_positive() -> None:
+    state = UIState()
+    assert apply_setting_change(state, propose_fitness_change(state, "normalization_mode", "manual"))
+    assert not validate_scales((600, 3000, 20)).errors
+    for values in ((0, 3000, 20), (float("inf"), 3000, 20), (600, -1, 20)):
+        assert validate_scales(values).errors
+    assert propose_fitness_change(state, "time_reference_s", 0).errors
+    assert apply_setting_change(state, propose_fitness_change(state, "time_reference_s", 600))
+    assert state.config.fitness.time_reference_s == 600
+    assert state.config.fitness.length_reference_m is None
+
+
+def test_auto_scales_pending() -> None:
+    state = UIState()
+    assert apply_setting_change(state, propose_fitness_change(state, "normalization_mode", "auto"))
+    assert state.config.fitness.time_reference_s is None
+    assert state.config.fitness.length_reference_m is None
+    assert state.config.fitness.complexity_reference is None
+    assert propose_fitness_change(state, "time_reference_s", 600).errors

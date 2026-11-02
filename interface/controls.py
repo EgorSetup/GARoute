@@ -7,7 +7,7 @@ from typing import Callable
 from nicegui import ui
 from nicegui.elements.number import Number
 
-from algorithm.models import AppConfig, GAConfig
+from algorithm.models import AppConfig, GAConfig, ValidationReport
 from config import default_config, validate_config
 
 
@@ -17,6 +17,7 @@ class UIState:
 
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
+    custom_weights: tuple[float, float, float] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +46,10 @@ def _numeric_input(value: object) -> float | None:
     """Прочитать число из виджета без принятия NaN и бесконечности."""
 
     if type(value) in (int, float):
-        number = float(value)
+        try:
+            number = float(value)
+        except OverflowError:
+            return None
     elif isinstance(value, str):
         try:
             number = float(value.strip())
@@ -91,13 +95,201 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
     if pending.candidate is None or pending.errors:
         return False
     state.config = pending.candidate
+    if pending.key == "weights" and state.config.fitness.preset == "custom":
+        state.custom_weights = state.config.fitness.weights
     return True
+
+
+def validate_scales(values: tuple[object, object, object]) -> ValidationReport:
+    """Проверить три ручных эталона без автоподстановки чисел."""
+
+    if len(values) != 3:
+        return ValidationReport(errors=("Нужны три эталона",))
+    names = ("Tref (с)", "Lref (м)", "Cref (баллы)")
+    errors = tuple(
+        f"{name}: требуется положительное конечное число"
+        for name, value in zip(names, values)
+        if (number := _numeric_input(value)) is None or number <= 0
+    )
+    return ValidationReport(errors=errors)
+
+
+def propose_fitness_change(state: UIState, key: str, value: object) -> PendingChange:
+    """Подготовить изменение Fitness, сохранив неизвестные параметры пустыми."""
+
+    fitness = state.config.fitness
+    if key == "preset":
+        if value not in ("fast", "short", "easy", "custom"):
+            return PendingChange(key, value, None, ("Неизвестный пресет",))
+        fixed = {"fast": (1.0, 0.0, 0.0), "short": (0.0, 1.0, 0.0)}
+        weights = fixed.get(value, state.custom_weights if value == "custom" else None)
+        updated = replace(fitness, preset=value, weights=weights)
+    elif key == "weights":
+        if fitness.preset != "custom":
+            return PendingChange(key, value, None, ("Веса меняются только в пользовательском пресете",))
+        if not isinstance(value, (tuple, list)) or len(value) != 3:
+            return PendingChange(key, value, None, ("Нужны три веса",))
+        numbers = tuple(_numeric_input(v) for v in value)
+        if any(v is None or v < 0 for v in numbers):
+            return PendingChange(key, value, None, ("Веса должны быть конечными и неотрицательными",))
+        if abs(sum(numbers) - 100) > 1e-7:
+            return PendingChange(key, value, None, ("Сумма весов должна быть 100%",))
+        updated = replace(fitness, weights=tuple(v / 100 for v in numbers))
+    elif key == "normalization_mode":
+        if value not in ("auto", "manual"):
+            return PendingChange(key, value, None, ("Неизвестный режим нормализации",))
+        updated = replace(
+            fitness, normalization_mode=value,
+            time_reference_s=None, length_reference_m=None,
+            complexity_reference=None,
+        )
+    elif key in ("time_reference_s", "length_reference_m", "complexity_reference"):
+        if fitness.normalization_mode != "manual":
+            return PendingChange(key, value, None, ("Эталоны вручную задаются только в ручном режиме",))
+        number = None if value in (None, "") else _numeric_input(value)
+        if value not in (None, "") and (number is None or number <= 0):
+            return PendingChange(key, value, None, ("Эталон должен быть положительным конечным числом",))
+        updated = replace(fitness, **{key: number})
+    else:
+        return PendingChange(key, value, None, ("Неизвестная настройка Fitness",))
+
+    candidate = replace(state.config, fitness=updated)
+    errors = validate_config(candidate).errors
+    return PendingChange(key, value, candidate if not errors else None, errors)
 
 
 def reset_ga_defaults(state: UIState) -> None:
     """Сбросить лишь принятые настройки ГА, сохранив будущие настройки Fitness."""
 
     state.config = replace(state.config, ga=GAConfig())
+
+
+def build_fitness_controls(state: UIState) -> None:
+    """Показать пресеты и веса без выдуманных значений для открытых решений."""
+
+    with ui.expansion("Пресет и веса Fitness", value=True).classes("w-full"):
+        ui.label("Fitness / стоимость: меньше — лучше. Веса T / L / C, сумма 100%.").classes(
+            "panel-copy"
+        )
+        error_label = ui.label("").classes("setting-error")
+        details = None
+
+        def render_weights() -> None:
+            assert details is not None
+            details.clear()
+            fitness = state.config.fitness
+            with details:
+                if fitness.preset in ("fast", "short"):
+                    for name, value in zip(("Время T", "Длина L", "Сложность C"), fitness.weights):
+                        ui.label(f"{name}: {value * 100:g}%").classes("panel-copy")
+                        ui.slider(min=0, max=100, value=value * 100).disable().classes("w-full")
+                elif fitness.preset == "easy":
+                    ui.label("Веса Лёгкого ещё не утверждены (Q04).").classes("panel-copy")
+                    for name in ("Время T", "Длина L", "Сложность C"):
+                        ui.number(name + ", %", value=None).props("outlined dense disable").classes(
+                            "setting-field"
+                        )
+                elif fitness.preset == "custom":
+                    draft = [v * 100 for v in fitness.weights] if fitness.weights else [None] * 3
+
+                    def change_weight(index: int, value: object) -> None:
+                        draft[index] = value
+                        if any(v is None for v in draft):
+                            error_label.set_text("Заполните все три веса; сумма должна быть 100%")
+                            return
+                        pending = propose_fitness_change(state, "weights", tuple(draft))
+                        error_label.set_text("; ".join(pending.errors))
+                        apply_setting_change(state, pending)
+
+                    for index, name in enumerate(("Время T", "Длина L", "Сложность C")):
+                        ui.number(
+                            name + ", %", value=draft[index], min=0, max=100, step=1,
+                            on_change=lambda event, i=index: change_weight(i, event.value),
+                        ).props("outlined dense").classes("setting-field")
+                else:
+                    ui.label("Выберите пресет; веса пока не заданы.").classes("panel-copy")
+
+        def select_preset(value: object) -> None:
+            pending = propose_fitness_change(state, "preset", value)
+            error_label.set_text("; ".join(pending.errors))
+            if apply_setting_change(state, pending):
+                render_weights()
+
+        ui.select(
+            {"fast": "Быстрый", "short": "Экономичный", "easy": "Лёгкий",
+             "custom": "Пользовательский"},
+            label="Пресет", value=state.config.fitness.preset,
+            on_change=lambda event: select_preset(event.value),
+        ).props("outlined dense").classes("setting-field")
+        details = ui.column().classes("w-full")
+        render_weights()
+        ui.label("Лёгкий: L ≤ (1 + δL)·L_min и T ≤ (1 + δT)·T_min.").classes("panel-copy")
+        ui.label("Пороги δL/δT и место фильтрации ещё не согласованы (Q05-C).").classes(
+            "panel-copy"
+        )
+        ui.number("Превышение длины δL, %", value=None).props(
+            "outlined dense disable"
+        ).classes("setting-field")
+        ui.number("Превышение времени δT, %", value=None).props(
+            "outlined dense disable"
+        ).classes("setting-field")
+
+
+def build_normalization_controls(state: UIState) -> None:
+    """Показать выбор режима и ручные эталоны с единицами."""
+
+    with ui.expansion("Нормализация и эталоны", value=True).classes("w-full"):
+        ui.label("J = wT·T/Tref + wL·L/Lref + wC·C/Cref.").classes("panel-copy")
+        error_label = ui.label("").classes("setting-error")
+        details = None
+        fields = (
+            ("time_reference_s", "Tref, секунды"),
+            ("length_reference_m", "Lref, метры"),
+            ("complexity_reference", "Cref, баллы"),
+        )
+
+        def render_references() -> None:
+            assert details is not None
+            details.clear()
+            fitness = state.config.fitness
+            with details:
+                if fitness.normalization_mode == "auto":
+                    ui.label("По P0: Tref=mean(T), Lref=mean(L), Cref=max(1, mean(C)).").classes(
+                        "panel-copy"
+                    )
+                    for key, label in fields:
+                        value = getattr(fitness, key)
+                        ui.label(f"{label}: {value:g}" if value is not None else
+                                 f"{label}: будет вычислено").classes("panel-copy")
+                elif fitness.normalization_mode == "manual":
+                    ui.label("Введите все три положительных эталона.").classes("panel-copy")
+
+                    def change_reference(key: str, value: object) -> None:
+                        pending = propose_fitness_change(state, key, value)
+                        error_label.set_text("; ".join(pending.errors))
+                        apply_setting_change(state, pending)
+
+                    for key, label in fields:
+                        ui.number(
+                            label, value=getattr(fitness, key), min=0, step=1,
+                            on_change=lambda event, field=key: change_reference(field, event.value),
+                        ).props("outlined dense").classes("setting-field")
+                else:
+                    ui.label("Выберите режим нормализации.").classes("panel-copy")
+
+        def select_mode(value: object) -> None:
+            pending = propose_fitness_change(state, "normalization_mode", value)
+            error_label.set_text("; ".join(pending.errors))
+            if apply_setting_change(state, pending):
+                render_references()
+
+        ui.select(
+            {"auto": "По начальной популяции", "manual": "Вручную"},
+            label="Режим нормализации", value=state.config.fitness.normalization_mode,
+            on_change=lambda event: select_mode(event.value),
+        ).props("outlined dense").classes("setting-field")
+        details = ui.column().classes("w-full")
+        render_references()
 
 
 def build_ga_controls(state: UIState, on_change: Callable[[PendingChange], None]) -> None:

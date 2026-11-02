@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from nicegui import ui
 from nicegui.elements.tabs import TabPanels, Tabs
 
-from interface.controls import UIState, apply_setting_change, build_ga_controls
+from interface.controls import (
+    UIState, apply_setting_change, build_fitness_controls, build_ga_controls,
+    build_normalization_controls,
+)
 from interface.map_view import MapHandle, create_map
 
 
@@ -133,6 +136,8 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
             with ui.tab_panel(settings).classes("tab-content"):
                 ui.label("Настройки расчёта").classes("panel-heading")
                 build_ga_controls(state, lambda pending: apply_setting_change(state, pending))
+                build_fitness_controls(state)
+                build_normalization_controls(state)
             with ui.tab_panel(results).classes("tab-content"):
                 ui.label("Результаты").classes("panel-heading")
                 with ui.element("div").classes("empty-block"):
