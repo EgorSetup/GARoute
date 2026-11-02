@@ -19,6 +19,14 @@ class Route:
 
 
 @dataclass(frozen=True, slots=True)
+class Individual:
+    """Маршрут с рассчитанной извне стоимостью J."""
+
+    route: Route
+    j: float
+
+
+@dataclass(frozen=True, slots=True)
 class RouteContext:
     """Неизменяемые для проверки условия одного поиска."""
 
