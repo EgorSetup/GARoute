@@ -1,7 +1,7 @@
 """Подготовка независимого расчёта и приём только актуального результата."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from algorithm.genetic.evolution import RunInput, RunResult
@@ -42,8 +42,13 @@ def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
         return None, "Размер P0 не совпадает с N"
     if state.config.fitness.preset == "easy" and state.initial_population_preset != "easy":
         return None, "Сформируйте P0 для пресета «Лёгкий»"
+    frozen_config = deepcopy(state.config)
+    if frozen_config.ga.seed is None and state.initial_seed_used is not None:
+        frozen_config = replace(
+            frozen_config, ga=replace(frozen_config.ga, seed=state.initial_seed_used),
+        )
     run_input = RunInput(
-        tuple(deepcopy(population.population)), deepcopy(state.config),
+        tuple(deepcopy(population.population)), frozen_config,
         RouteContext(deepcopy(state.routing_graph), state.endpoint_a, state.endpoint_b,
                      deepcopy(state.turn_rules)),
         deepcopy(dict(state.normalized_roads.edges)),

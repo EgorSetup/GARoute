@@ -14,7 +14,7 @@ from nicegui.elements.input import Input
 from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
-from algorithm.genetic.initialization import generate_initial_population, production_weight_strategy
+from algorithm.genetic.initialization import choose_seed, generate_initial_population, production_weight_strategy
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.evaluation.fitness import (
     TimeModel, calculate_length, calculate_travel_time, check_easy_constraints,
@@ -174,6 +174,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 map_element.remove_layer(layer)
             population_layers.clear()
             state.initial_population = None
+            state.initial_seed_used = None
             state.initial_population_preset = None
             state.initial_complexities = ()
             state.initial_previews = ()
@@ -309,6 +310,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     start, end = state.endpoint_a, state.endpoint_b
                     app_config = state.config
                     config = app_config.ga
+                    seed_used = choose_seed(config.seed)
                     context = RouteContext(graph, start, end, state.turn_rules)
                     time_model = TimeModel(roads.edges)
                     easy_preflight = None
@@ -343,7 +345,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                             return check_easy_constraints(metrics, easy_preflight, limits)
                     try:
                         result = await asyncio.to_thread(
-                            generate_initial_population, context, config, Random(config.seed),
+                            generate_initial_population, context, config, Random(seed_used),
                             production_weight_strategy(config.random_weight_strength), eligible,
                         )
                     except (ValueError, OverflowError) as error:
@@ -412,6 +414,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         return
                     clear_population()
                     state.initial_population = result
+                    state.initial_seed_used = seed_used
                     state.initial_population_preset = app_config.fitness.preset
                     state.initial_complexities = breakdowns
                     state.initial_previews = previews
@@ -422,6 +425,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     if result.error is None:
                         population_layers.extend(render_population(map_element, result.population, roads))
                     status = population_status_text(result)
+                    status += f" Seed: {seed_used}."
                     if complexity_error is not None:
                         status += f" C не вычислена: {complexity_error}."
                     population_label.set_text(status)

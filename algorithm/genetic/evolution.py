@@ -16,7 +16,7 @@ from algorithm.evaluation.penalties import (
     PenaltyPolicy, calculate_complexity, calculate_penalties, extract_penalty_events,
 )
 from algorithm.genetic.crossover import crossover
-from algorithm.genetic.initialization import production_weight_strategy, route_signature
+from algorithm.genetic.initialization import choose_seed, production_weight_strategy, route_signature
 from algorithm.genetic.mutation import MutationPolicy, mutate
 from algorithm.genetic.selection import tournament_select
 from algorithm.genetic.validation import validate_route
@@ -101,6 +101,7 @@ class RunResult:
     scales: NormalizationScales | None
     error: str | None = None
     failed_generation: GenerationResult | None = None
+    seed_used: int | None = None
 
     @property
     def transitions(self) -> int:
@@ -338,9 +339,12 @@ def should_stop(history: Sequence[GenerationSnapshot], config: GAConfig) -> str 
 def run_evolution(run_input: RunInput) -> RunResult:
     """Оценить P0 и выполнить не более G_max переходов на копии условий."""
 
+    seed_used: int | None = None
+
     def failed(reason: str, detail: str, history=(), best=None, scales=None,
                generation=None) -> RunResult:
-        return RunResult("failed", reason, tuple(history), best, scales, detail, generation)
+        return RunResult("failed", reason, tuple(history), best, scales, detail, generation,
+                         seed_used)
 
     report = validate_config(run_input.config)
     if not report.ready_for_run:
@@ -411,7 +415,8 @@ def run_evolution(run_input: RunInput) -> RunResult:
         generation_context = GenerationContext(
             routes, ga, MutationPolicy(production_weight_strategy(ga.random_weight_strength)), eligible,
         )
-        rng = Random(ga.seed)
+        seed_used = choose_seed(ga.seed)
+        rng = Random(seed_used)
         while (stop := should_stop(history, ga)) is None:
             step = build_next_generation(population, generation_context, rng, evaluate)
             if step.error is not None:
@@ -425,7 +430,7 @@ def run_evolution(run_input: RunInput) -> RunResult:
             candidate = snapshot.population[snapshot.best_index]
             if candidate.j < best.j:
                 best = candidate
-        return RunResult("completed", stop, tuple(history), best, scales)
+        return RunResult("completed", stop, tuple(history), best, scales, seed_used=seed_used)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         reason = "generation_failed" if history else "invalid_input"
         return failed(reason, str(error), history, best, scales)

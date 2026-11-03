@@ -35,6 +35,7 @@ class UIState:
     endpoint_b: object | None = None
     initial_population: object | None = None
     initial_population_running: bool = False
+    initial_seed_used: int | None = None
     initial_population_preset: str | None = None
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
     initial_previews: tuple["RoutePreview", ...] = ()
@@ -268,6 +269,7 @@ def confirm_change(state: UIState) -> UIState:
     state.highlighted_route_ids.clear()
     state.playback = PlaybackState()
     state.initial_population = None
+    state.initial_seed_used = None
     state.initial_population_preset = None
     state.initial_complexities = ()
     state.initial_previews = ()

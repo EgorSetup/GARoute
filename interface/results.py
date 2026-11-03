@@ -177,6 +177,8 @@ def build_results_panel(state: UIState) -> None:
                 ui.label("Эволюция завершена").classes("panel-heading")
                 ui.label(f"Поколений: {len(outcome.history)} (P0 + {outcome.transitions} переходов); "
                          f"остановка: {outcome.stop_reason}").classes("panel-copy")
+                if outcome.seed_used is not None:
+                    ui.label(f"Seed для повтора: {outcome.seed_used}").classes("panel-copy")
                 if outcome.best is not None and outcome.best.metrics is not None:
                     metrics = outcome.best.metrics
                     ui.label(f"Лучший: J={outcome.best.j:.4f}, L={metrics.length_m:.2f} м, "
