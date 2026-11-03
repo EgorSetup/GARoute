@@ -27,7 +27,8 @@ from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
 from data.road_graph import NormalizedRoadData, build_road_data
 from interface.controls import (
-    UIState, cancel_change, confirm_change, request_condition_change, select_endpoint,
+    RoutePreview, UIState, cancel_change, confirm_change, request_condition_change,
+    select_endpoint,
 )
 from interface.results import population_status_text
 
@@ -173,7 +174,9 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 map_element.remove_layer(layer)
             population_layers.clear()
             state.initial_population = None
+            state.initial_population_preset = None
             state.initial_complexities = ()
+            state.initial_previews = ()
             state.initial_scales = None
             state.initial_scale_error = None
             state.easy_references = None
@@ -335,6 +338,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         p0_button.enable()
                         return
                     breakdowns = ()
+                    previews = ()
                     complexity_error = None
                     scales = None
                     scale_error = None
@@ -356,17 +360,35 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                                 except (ValueError, KeyError, OverflowError) as error:
                                     references = None
                                     reference_error = f"L_min/T_min недоступны: {error}"
+                            route_previews = []
+                            for route in result.population:
+                                try:
+                                    length = calculate_length(route, context, time_model)
+                                except (ValueError, KeyError, OverflowError) as error:
+                                    route_previews.append(RoutePreview(None, None, str(error)))
+                                    continue
+                                try:
+                                    time = calculate_travel_time(route, context, time_model)
+                                    route_previews.append(RoutePreview(length, time))
+                                except (ValueError, KeyError, OverflowError) as error:
+                                    route_previews.append(RoutePreview(length, None, str(error)))
+                            previews_snapshot = tuple(route_previews)
+                            if any(item.time_s is None for item in previews_snapshot):
+                                first_error = next(item.error for item in previews_snapshot if item.time_s is None)
+                                return (evaluated, previews_snapshot, None,
+                                        f"Автоэталоны не вычислены: {first_error}",
+                                        references, reference_error)
+                            metrics = tuple(RouteMetrics(item.length_m, item.time_s, breakdown.total)
+                                            for item, breakdown in zip(previews_snapshot, evaluated))
                             try:
-                                metrics = tuple(RouteMetrics(
-                                    calculate_length(route, context, time_model),
-                                    calculate_travel_time(route, context, time_model),
-                                    item.total,
-                                ) for route, item in zip(result.population, evaluated))
-                                return evaluated, compute_scales(metrics), None, references, reference_error
+                                scales_snapshot = compute_scales(metrics)
+                                return evaluated, previews_snapshot, scales_snapshot, None, references, reference_error
                             except (ValueError, OverflowError) as error:
-                                return evaluated, None, f"Автоэталоны не вычислены: {error}", references, reference_error
+                                return (evaluated, previews_snapshot, None,
+                                        f"Автоэталоны не вычислены: {error}",
+                                        references, reference_error)
                         try:
-                            breakdowns, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
+                            breakdowns, previews, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
                         except (ValueError, KeyError, OverflowError) as error:
                             complexity_error = str(error)
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
@@ -374,7 +396,9 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         return
                     clear_population()
                     state.initial_population = result
+                    state.initial_population_preset = app_config.fitness.preset
                     state.initial_complexities = breakdowns
+                    state.initial_previews = previews
                     state.initial_scales = scales
                     state.initial_scale_error = scale_error
                     state.easy_references = easy_refs

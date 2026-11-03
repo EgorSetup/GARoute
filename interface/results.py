@@ -4,8 +4,11 @@ from nicegui import ui
 
 from algorithm.genetic.initialization import PopulationResult
 from algorithm.evaluation.penalties import PenaltyBreakdown, calculate_complexity
+from algorithm.evaluation.fitness import evaluate_cost, resolve_preset
+from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
+from algorithm.models import RouteMetrics
 from config import penalty_catalog
-from interface.controls import UIState
+from interface.controls import RoutePreview, UIState
 from visualization.charts import render_empty_charts
 
 
@@ -49,6 +52,22 @@ def complexity_summary(breakdown: PenaltyBreakdown) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def render_route_metrics(metrics: RoutePreview, breakdown: PenaltyBreakdown,
+                         cost: float | None, scales: NormalizationScales | None) -> tuple[str, ...]:
+    """Строки карточки P0 с единицами и явными пробелами обязательных данных."""
+
+    lines = [f"L = {metrics.length_m:.2f} м" if metrics.length_m is not None else "L недоступна"]
+    lines.append(f"T = {metrics.time_s:.2f} с" if metrics.time_s is not None else
+                 f"T недоступно: {metrics.error or 'нет данных'}")
+    lines.append(f"C_observed = {calculate_complexity(breakdown):.2f} балла")
+    if scales is not None:
+        lines.append(f"Эталоны: Tref={scales.time_s:.2f} с, "
+                     f"Lref={scales.length_m:.2f} м, Cref={scales.complexity:.2f} балла")
+    lines.append(f"J = {cost:.4f} (безразмерная стоимость; меньше — лучше)" if cost is not None
+                 else "J недоступна")
+    return tuple(lines)
+
+
 def build_playback_controls(state: UIState) -> None:
     """Разместить все команды перемотки, заблокировав их без истории."""
 
@@ -80,7 +99,7 @@ def build_results_panel(state: UIState) -> None:
 
     ui.label("Результаты").classes("panel-heading")
     with ui.element("section").classes("results-section"):
-        ui.label("Сложность начальной популяции P0").classes("panel-heading")
+        ui.label("Метрики начальной популяции P0").classes("panel-heading")
         route_select = ui.select({}, label="Маршрут P0", value=None).props("outlined dense").classes("setting-field")
         detail = ui.column().classes("w-full")
 
@@ -98,8 +117,44 @@ def build_results_panel(state: UIState) -> None:
             selected = route_select.value if route_select.value in range(len(breakdowns)) else 0
             route_select.set_value(selected)
             with detail:
-                ui.label("Предварительная оценка P0, не результат эволюции и не Fitness J.").classes("panel-copy")
-                for line in complexity_summary(breakdowns[selected]):
+                ui.label("Предварительная оценка P0, не результат эволюции.").classes("panel-copy")
+                if selected < len(state.initial_previews):
+                    preview = state.initial_previews[selected]
+                    fitness = state.config.fitness
+                    scales = None
+                    if fitness.normalization_mode == "auto":
+                        scales = state.initial_scales
+                    elif fitness.normalization_mode == "manual":
+                        values = (fitness.time_reference_s, fitness.length_reference_m,
+                                  fitness.complexity_reference)
+                        if all(value is not None for value in values):
+                            candidate = NormalizationScales(*values)
+                            if not validate_manual_scales(candidate).errors:
+                                scales = candidate
+                    cost = None
+                    reason = None
+                    if preview.time_s is None:
+                        reason = preview.error or "неизвестно время маршрута"
+                    elif state.easy_references is None:
+                        reason = state.easy_reference_error or "обязательные скорости области не проверены"
+                    elif scales is None:
+                        reason = state.initial_scale_error or "выберите режим и задайте эталоны"
+                    elif fitness.preset is None:
+                        reason = "выберите пресет"
+                    elif fitness.preset == "easy" and state.initial_population_preset != "easy":
+                        reason = "базовая P0 ещё не отфильтрована для «Лёгкого»"
+                    else:
+                        try:
+                            metrics = RouteMetrics(preview.length_m, preview.time_s,
+                                                   breakdowns[selected].total)
+                            cost = evaluate_cost(metrics, resolve_preset(fitness.preset, fitness.weights), scales)
+                        except ValueError as error:
+                            reason = str(error)
+                    for line in render_route_metrics(preview, breakdowns[selected], cost, scales):
+                        ui.label(line).classes("panel-copy")
+                    if reason is not None:
+                        ui.label(f"J недоступна: {reason}").classes("setting-error")
+                for line in complexity_summary(breakdowns[selected])[1:]:
                     ui.label(line).classes("panel-copy")
 
         route_select.on_value_change(lambda _: render_complexity())

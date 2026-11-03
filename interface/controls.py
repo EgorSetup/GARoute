@@ -34,7 +34,9 @@ class UIState:
     endpoint_a: object | None = None
     endpoint_b: object | None = None
     initial_population: object | None = None
+    initial_population_preset: str | None = None
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
+    initial_previews: tuple["RoutePreview", ...] = ()
     initial_scales: NormalizationScales | None = None
     initial_scale_error: str | None = None
     easy_references: EasyReferences | None = None
@@ -70,6 +72,15 @@ class PendingChange:
     value: object
     candidate: AppConfig | None
     errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RoutePreview:
+    """Доступные метры/секунды особи P0 без подстановки неизвестной скорости."""
+
+    length_m: float | None
+    time_s: float | None
+    error: str | None = None
 
 
 SubmitChange = Callable[[PendingChange, Callable[[], None], Callable[[], None]], None]
@@ -145,6 +156,8 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
         state.custom_weights = state.config.fitness.weights
+    if state.refresh_population_results is not None:
+        state.refresh_population_results()
     return True
 
 
@@ -233,7 +246,9 @@ def confirm_change(state: UIState) -> UIState:
     state.highlighted_route_ids.clear()
     state.playback = PlaybackState()
     state.initial_population = None
+    state.initial_population_preset = None
     state.initial_complexities = ()
+    state.initial_previews = ()
     state.initial_scales = None
     state.initial_scale_error = None
     state.easy_references = None

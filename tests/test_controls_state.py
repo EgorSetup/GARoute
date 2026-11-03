@@ -77,6 +77,18 @@ def test_preset_locks_weights() -> None:
     assert state.config.fitness.weights == (0.2, 0.3, 0.5)
 
 
+def test_switch_preset_refreshes_p0_card_without_clearing_population() -> None:
+    state = UIState()
+    state.initial_population = object()
+    refreshed = []
+    state.refresh_population_results = lambda: refreshed.append(True)
+    request_condition_change(state, propose_fitness_change(state, "preset", "fast"))
+    assert state.pending_change is None
+    assert state.initial_population is not None
+    assert state.config.fitness.preset == "fast"
+    assert refreshed == [True]
+
+
 def test_manual_scales_positive() -> None:
     state = UIState()
     assert apply_setting_change(state, propose_fitness_change(state, "normalization_mode", "manual"))
