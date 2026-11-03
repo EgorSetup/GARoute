@@ -8,7 +8,10 @@ import pytest
 
 from algorithm.models import RoadEdge
 from data.road_graph import NormalizedRoadData
-from data.traffic import build_visual_segments
+from data.traffic import (
+    CoveredInterval, SegmentCollection, SegmentationIssue, VisualSegment,
+    assign_edge_levels, build_visual_segments,
+)
 
 
 def road_data(*specs) -> NormalizedRoadData:
@@ -97,3 +100,55 @@ def test_invalid_geometry_is_explicitly_uncovered(geometry) -> None:
     assert [(issue.edge_id, issue.reason) for issue in result.issues] == [
         (edge_id, "invalid_geometry"),
     ]
+
+
+def coverage_example(lengths: tuple[float, ...]) -> SegmentCollection:
+    edge_id = (1, 2, 0)
+    segments = []
+    offset = 0.0
+    for index, length in enumerate(lengths):
+        segments.append(VisualSegment(
+            f"s{index}", 101, "Пример", ((0.0, 0.0), (0.001, 0.0)), length,
+            (CoveredInterval(edge_id, offset, offset + length),),
+        ))
+        offset += length
+    return SegmentCollection(tuple(segments), (), ((edge_id, offset),))
+
+
+def test_dominant_coverage_and_short_closed_part_not_dominant() -> None:
+    coverage = coverage_example((150, 320, 30))
+    levels = assign_edge_levels(coverage, {"s0": 3, "s1": 8, "s2": 11})
+    assert levels == {(1, 2, 0): 8}
+
+
+def test_tie_higher_level_without_tolerance() -> None:
+    coverage = coverage_example((100, 100))
+    assert assign_edge_levels(coverage, {"s0": 3, "s1": 8}) == {(1, 2, 0): 8}
+    near_tie = coverage_example((100, 100.000000001))
+    assert assign_edge_levels(near_tie, {"s0": 11, "s1": 1}) == {(1, 2, 0): 1}
+
+
+def test_crossing_roads_independent() -> None:
+    first, second = (1, 2, 0), (3, 4, 0)
+    coverage = SegmentCollection((
+        VisualSegment("a", 101, "A", ((0.0, 0.0), (1.0, 1.0)), 100,
+                      (CoveredInterval(first, 0, 100),)),
+        VisualSegment("b", 102, "B", ((0.0, 1.0), (1.0, 0.0)), 100,
+                      (CoveredInterval(second, 0, 100),)),
+    ), (), ((first, 100), (second, 100)))
+    assert assign_edge_levels(coverage, {"a": 11, "b": 2}) == {first: 11, second: 2}
+
+
+def test_missing_coverage_and_invalid_level_are_errors() -> None:
+    edge_id = (1, 2, 0)
+    missing = SegmentCollection((), (), ((edge_id, 100),))
+    with pytest.raises(ValueError, match="missing or unexpected"):
+        assign_edge_levels(missing, {})
+    invalid = coverage_example((100,))
+    with pytest.raises(ValueError, match="traffic levels"):
+        assign_edge_levels(invalid, {"s0": 12})
+    marked = replace(invalid, issues=(SegmentationIssue(edge_id, "missing_coverage"),))
+    with pytest.raises(ValueError, match="uncovered"):
+        assign_edge_levels(marked, {})
+    with pytest.raises(ValueError, match="target edge lengths required"):
+        assign_edge_levels(replace(invalid, target_lengths=()), {})

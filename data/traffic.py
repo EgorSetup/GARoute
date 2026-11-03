@@ -52,6 +52,7 @@ class SegmentCollection:
 
     segments: tuple[VisualSegment, ...]
     issues: tuple[SegmentationIssue, ...]
+    target_lengths: tuple[tuple[EdgeId, float], ...] = ()
 
 
 def _edge_order(edge_id: EdgeId) -> str:
@@ -248,7 +249,69 @@ def build_visual_segments(
         else:
             if previous != road_data.edges[edge_id].length_m:
                 issues.append(SegmentationIssue(edge_id, "missing_coverage"))
-    return SegmentCollection(tuple(segments), tuple(issues))
+    return SegmentCollection(
+        tuple(segments), tuple(issues),
+        tuple((edge_id, road_data.edges[edge_id].length_m)
+              for edge_id in target_edges if edge_id in road_data.edges),
+    )
+
+
+def assign_edge_levels(
+    coverage: SegmentCollection, segment_levels: Mapping[str, int],
+    policy: str = "dominant_coverage",
+) -> dict[EdgeId, int]:
+    """Назначить уровень сегмента с наибольшим покрытием направленного ребра."""
+
+    if policy != "dominant_coverage":
+        raise ValueError("unsupported coverage policy")
+    if coverage.issues:
+        raise ValueError(f"segmentation has {len(coverage.issues)} uncovered or invalid edges")
+    segment_ids = {segment.segment_id for segment in coverage.segments}
+    if len(segment_ids) != len(coverage.segments):
+        raise ValueError("duplicate segment id")
+    unknown_ids = set(segment_levels) - segment_ids
+    if unknown_ids:
+        raise ValueError(f"unknown segment ids: {sorted(unknown_ids)!r}")
+    if any(type(level) is not int or not 1 <= level <= 11
+           for level in segment_levels.values()):
+        raise ValueError("traffic levels must be integers from 1 to 11")
+
+    lengths: dict[EdgeId, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    intervals: dict[EdgeId, list[CoveredInterval]] = defaultdict(list)
+    for segment in coverage.segments:
+        for interval in segment.coverage:
+            if (type(interval.start_m) not in (int, float)
+                    or type(interval.end_m) not in (int, float)
+                    or not isfinite(interval.start_m) or not isfinite(interval.end_m)
+                    or interval.start_m < 0 or interval.end_m <= interval.start_m):
+                raise ValueError(f"invalid coverage interval: {interval.edge_id!r}")
+            lengths[interval.edge_id][segment.segment_id] += interval.end_m - interval.start_m
+            intervals[interval.edge_id].append(interval)
+
+    expected = dict(coverage.target_lengths)
+    if len(expected) != len(coverage.target_lengths):
+        raise ValueError("duplicate target edge")
+    if lengths and not expected:
+        raise ValueError("target edge lengths required for coverage validation")
+    if expected and set(lengths) != set(expected):
+        raise ValueError("missing or unexpected edge coverage")
+    for edge_id, total_length in expected.items():
+        ordered = sorted(intervals[edge_id], key=lambda item: item.start_m)
+        previous = 0.0
+        for interval in ordered:
+            if interval.start_m != previous:
+                raise ValueError(f"gap or overlap in edge coverage: {edge_id!r}")
+            previous = interval.end_m
+        if previous != total_length:
+            raise ValueError(f"incomplete edge coverage: {edge_id!r}")
+
+    result = {}
+    for edge_id, amounts in lengths.items():
+        winner = max(sorted(amounts), key=lambda segment_id: (
+            amounts[segment_id], segment_levels.get(segment_id, 1),
+        ))
+        result[edge_id] = segment_levels.get(winner, 1)
+    return result
 
 
 def speed_factor(level: int, factors: Mapping[int, float] = TRAFFIC_SPEED_FACTORS) -> float:
