@@ -34,6 +34,7 @@ class UIState:
     endpoint_a: object | None = None
     endpoint_b: object | None = None
     initial_population: object | None = None
+    initial_population_running: bool = False
     initial_population_preset: str | None = None
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
     initial_previews: tuple["RoutePreview", ...] = ()
@@ -58,6 +59,11 @@ class UIState:
     generation_history: list[object] = field(default_factory=list)
     chart_data: dict[str, object] = field(default_factory=dict)
     selected_run_id: str | None = None
+    active_run_id: str | None = None
+    run_status: str = "idle"
+    run_error: str | None = None
+    latest_run: object | None = None
+    refresh_run: Callable[[], None] | None = None
     highlighted_route_ids: set[str] = field(default_factory=set)
     pending_change: "PendingChange | None" = None
     pending_base_config: AppConfig | None = None
@@ -163,6 +169,8 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
         state.custom_weights = state.config.fitness.weights
     if state.refresh_population_results is not None:
         state.refresh_population_results()
+    if state.refresh_run is not None:
+        state.refresh_run()
     return True
 
 
@@ -182,6 +190,8 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
 
     if change.errors or change.candidate is None:
         return change
+    if state.active_run_id is not None and change.key != "playback_speed":
+        return PendingChange(change.key, change.value, None, ("Расчёт уже выполняется",))
     if state.pending_change is not None:
         return PendingChange(change.key, change.value, None, ("Есть незавершённое изменение",))
     if change.key == "playback_speed":
@@ -206,6 +216,8 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
 def select_endpoint(state: UIState, endpoint: str, node: object) -> PendingChange:
     """Предложить A/B после проверки узла и достижимости с запретами поворотов."""
 
+    if state.active_run_id is not None:
+        return PendingChange("endpoint", node, None, ("Расчёт уже выполняется",))
     if endpoint not in ("A", "B"):
         return PendingChange("endpoint", node, None, ("Неизвестная точка маршрута",))
     graph = state.routing_graph
@@ -237,6 +249,8 @@ def cancel_change(state: UIState) -> None:
 def confirm_change(state: UIState) -> UIState:
     """Атомарно применить предложение и удалить данные прежних условий."""
 
+    if state.active_run_id is not None:
+        return state
     change = state.pending_change
     if change is None or state.pending_base_config != state.config:
         cancel_change(state)
@@ -248,6 +262,9 @@ def confirm_change(state: UIState) -> UIState:
     state.generation_history.clear()
     state.chart_data.clear()
     state.selected_run_id = None
+    state.latest_run = None
+    state.run_status = "idle"
+    state.run_error = None
     state.highlighted_route_ids.clear()
     state.playback = PlaybackState()
     state.initial_population = None
@@ -266,6 +283,8 @@ def confirm_change(state: UIState) -> UIState:
         state.refresh_normalization()
     if state.clear_population_layers is None and state.refresh_easy is not None:
         state.refresh_easy()
+    if state.refresh_run is not None:
+        state.refresh_run()
     cancel_change(state)
     return state
 

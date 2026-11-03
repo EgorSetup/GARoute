@@ -189,13 +189,15 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 state.refresh_easy()
             if not state.demo_mode:
                 population_label.set_text("P0 ещё не сформирована")
+            if state.refresh_run is not None:
+                state.refresh_run()
 
         if not state.demo_mode:
             state.clear_population_layers = clear_population
 
         def show_pair_status() -> None:
             if state.endpoint_a is not None and state.endpoint_b is not None:
-                status_label.set_text("A/B выбраны и направленно достижимы. Расчёт пока недоступен: модель оценки ещё не подключена.")
+                status_label.set_text("A/B выбраны и направленно достижимы. Сформируйте P0 и выберите настройки для расчёта.")
             elif state.endpoint_a is not None:
                 status_label.set_text("Точка A выбрана; теперь выберите B")
             elif state.endpoint_b is not None:
@@ -251,6 +253,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     "map-message-copy"
                 )
                 async def load_area() -> None:
+                    if state.active_run_id is not None:
+                        return
                     button.disable()
                     status_label.set_text("Загружаю автомобильную сеть OSM…")
                     try:
@@ -283,10 +287,22 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 population_label = ui.label("P0 ещё не сформирована").classes("map-message-copy")
 
                 async def show_initial_population() -> None:
+                    if state.active_run_id is not None or state.initial_population_running:
+                        return
                     if (state.routing_graph is None or state.normalized_roads is None
                             or state.endpoint_a is None or state.endpoint_b is None):
                         return
                     p0_button.disable()
+                    state.initial_population_running = True
+                    if state.refresh_run is not None:
+                        state.refresh_run()
+
+                    def finish() -> None:
+                        state.initial_population_running = False
+                        p0_button.enable()
+                        if state.refresh_run is not None:
+                            state.refresh_run()
+
                     population_label.set_text("Формирую P0…")
                     graph = state.routing_graph
                     roads = state.normalized_roads
@@ -304,17 +320,17 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                             )
                         except (ValueError, KeyError, OverflowError) as error:
                             if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                                p0_button.enable()
+                                finish()
                                 return
                             clear_population()
                             state.easy_reference_error = f"L_min/T_min недоступны: {error}"
                             if state.refresh_easy is not None:
                                 state.refresh_easy()
                             population_label.set_text(f"P0 Лёгкого не сформирована: {error}")
-                            p0_button.enable()
+                            finish()
                             return
                         if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                            p0_button.enable()
+                            finish()
                             return
                         limits = EasyLimits(app_config.fitness.easy_length_delta,
                                             app_config.fitness.easy_time_delta)
@@ -332,10 +348,10 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         )
                     except (ValueError, OverflowError) as error:
                         population_label.set_text(f"P0 не сформирована: {error}")
-                        p0_button.enable()
+                        finish()
                         return
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                        p0_button.enable()
+                        finish()
                         return
                     breakdowns = ()
                     previews = ()
@@ -392,7 +408,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         except (ValueError, KeyError, OverflowError) as error:
                             complexity_error = str(error)
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                        p0_button.enable()
+                        finish()
                         return
                     clear_population()
                     state.initial_population = result
@@ -415,7 +431,9 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         state.refresh_normalization()
                     if state.refresh_easy is not None:
                         state.refresh_easy()
-                    p0_button.enable()
+                    if state.refresh_run is not None:
+                        state.refresh_run()
+                    finish()
 
                 p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")
                 p0_button.disable()

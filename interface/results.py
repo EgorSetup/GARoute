@@ -3,6 +3,7 @@
 from nicegui import ui
 
 from algorithm.genetic.initialization import PopulationResult
+from algorithm.genetic.evolution import RunResult
 from algorithm.evaluation.penalties import PenaltyBreakdown, calculate_complexity
 from algorithm.evaluation.fitness import evaluate_cost, resolve_preset
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
@@ -164,11 +165,34 @@ def build_results_panel(state: UIState) -> None:
         ui.label("ДЕМО: искусственная история только для проверки подтверждения.").classes(
             "setting-error"
         )
-    with ui.element("section").classes("empty-block"):
-        ui.label("Эволюция ещё не выполнялась").classes("panel-heading")
-        ui.label("После запуска здесь появятся лучшие маршруты и их метрики.").classes(
-            "panel-copy"
-        )
+    run_panel = ui.column().classes("empty-block w-full")
+
+    def render_run() -> None:
+        run_panel.clear()
+        with run_panel:
+            outcome = state.latest_run
+            if state.run_status == "running":
+                ui.label("Выполняется эволюция…").classes("panel-heading")
+            elif isinstance(outcome, RunResult) and outcome.status == "completed":
+                ui.label("Эволюция завершена").classes("panel-heading")
+                ui.label(f"Поколений: {len(outcome.history)} (P0 + {outcome.transitions} переходов); "
+                         f"остановка: {outcome.stop_reason}").classes("panel-copy")
+                if outcome.best is not None and outcome.best.metrics is not None:
+                    metrics = outcome.best.metrics
+                    ui.label(f"Лучший: J={outcome.best.j:.4f}, L={metrics.length_m:.2f} м, "
+                             f"T={metrics.time_s:.2f} с, C={metrics.complexity:.2f} балла").classes("panel-copy")
+            elif isinstance(outcome, RunResult):
+                ui.label("Расчёт не завершён").classes("panel-heading")
+                ui.label(f"{outcome.stop_reason}: {outcome.error or 'нет подробностей'}").classes("setting-error")
+                if outcome.history:
+                    ui.label(f"Сохранено полных поколений для диагностики: {len(outcome.history)}").classes("panel-copy")
+            else:
+                ui.label("Эволюция ещё не выполнялась").classes("panel-heading")
+                ui.label("После запуска здесь появятся лучшие маршруты и их метрики.").classes("panel-copy")
+
+    previous_refresh = state.refresh_run
+    state.refresh_run = lambda: (previous_refresh() if previous_refresh else None, render_run())
+    render_run()
     with ui.element("section").classes("results-section"):
         ui.label("Карточки лучших маршрутов").classes("panel-heading")
         ui.label("Пока нет запусков для сравнения: L, T, C и J не вычислены.").classes(

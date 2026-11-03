@@ -1,5 +1,6 @@
-"""Основная страница GARoute без вычислений генетического алгоритма."""
+"""Основная страница GARoute и неблокирующий запуск расчёта."""
 
+import asyncio
 from dataclasses import dataclass
 
 from nicegui import ui
@@ -13,6 +14,9 @@ from interface.controls import (
 )
 from interface.map_view import MapHandle, create_map, set_map_mode
 from interface.results import build_results_panel
+from interface.run_state import apply_run_completion, start_run
+from algorithm.genetic.evolution import RunResult, run_evolution
+from algorithm.genetic.initialization import PopulationResult
 
 
 @dataclass(slots=True)
@@ -112,13 +116,48 @@ def _disabled_button(label: str, reason: str, icon: str | None = None) -> None:
     button.tooltip(reason)
 
 
-def _build_header() -> None:
+def _build_header(state: UIState, open_results) -> None:
     with ui.element("header").classes("topbar"):
         with ui.element("div").classes("brand"):
             ui.label("GARoute").classes("brand-name")
             ui.label("Генетический поиск маршрута").classes("brand-subtitle")
         with ui.element("div").classes("top-actions"):
-            _disabled_button("Рассчитать", "Расчёт станет доступен после подключения модели оценки и эволюции", "route")
+            async def calculate() -> None:
+                handle, error = start_run(state)
+                if handle is None:
+                    state.run_status = "failed"
+                    state.run_error = error
+                    refresh()
+                    return
+                try:
+                    outcome = await asyncio.to_thread(run_evolution, handle.run_input)
+                except Exception as error:
+                    outcome = RunResult("failed", "worker_error", (), None, None, str(error))
+                if apply_run_completion(state, handle.run_id, outcome) and outcome.status == "completed":
+                    open_results()
+
+            button = ui.button("Рассчитать", on_click=calculate, icon="route").props("outline dense")
+            status = ui.label("").classes("panel-copy")
+
+            def refresh() -> None:
+                ready = (isinstance(state.initial_population, PopulationResult)
+                         and state.initial_population.error is None
+                         and not state.initial_population_running)
+                if ready and state.active_run_id is None:
+                    button.enable()
+                else:
+                    button.disable()
+                if state.run_status == "running":
+                    status.set_text("Идёт расчёт…")
+                elif state.run_error:
+                    status.set_text(f"Расчёт недоступен: {state.run_error}")
+                elif state.run_status == "completed":
+                    status.set_text("Расчёт завершён")
+                else:
+                    status.set_text("")
+
+            state.refresh_run = refresh
+            refresh()
             _disabled_button("Воспроизвести", "Расчёты ещё не выполнены", "play_arrow")
             _disabled_button("Шаг назад", "Расчёты ещё не выполнены", "skip_previous")
             _disabled_button("Шаг вперёд", "Расчёты ещё не выполнены", "skip_next")
@@ -167,7 +206,7 @@ def _build_left_panel(state: UIState) -> tuple[Input, Input]:
     return endpoint_a, endpoint_b
 
 
-def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
+def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels, object]:
     with ui.element("aside").classes("side-panel right-panel"):
         pending_ui: dict[str, object] = {}
         with ui.dialog().props("persistent") as change_dialog, ui.card():
@@ -220,17 +259,20 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels]:
                 build_penalty_controls(state, submit)
             with ui.tab_panel(results).classes("tab-content"):
                 build_results_panel(state)
-    return tabs, panels
+    return tabs, panels, results
 
 
 def build_layout(state: UIState) -> ViewHandles:
     """Собрать одну страницу с картой и панелями, сохраняя карту при смене вкладки."""
 
     ui.add_head_html(STYLE)
+    tabs_holder = {}
     with ui.element("div").classes("app-shell"):
-        _build_header()
+        _build_header(state, lambda: tabs_holder["tabs"].set_value(tabs_holder["results"]))
         with ui.element("main").classes("workspace"):
             endpoint_inputs = _build_left_panel(state)
             map_view = create_map(state, endpoint_inputs=endpoint_inputs)
-            tabs, panels = _build_right_panel(state)
+            tabs, panels, results = _build_right_panel(state)
+            tabs_holder["tabs"] = tabs
+            tabs_holder["results"] = results
     return ViewHandles(map_view=map_view, tabs=tabs, panels=panels)
