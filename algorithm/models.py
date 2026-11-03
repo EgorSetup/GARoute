@@ -149,6 +149,7 @@ class GAConfig:
     seed: int | None = None
     random_weight_strength: float | None = 1.0  # Q06-C VERIFY: 2^U(-s,s)
     stagnation_window: int | None = 10  # Q06-C VERIFY
+    stagnation_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)

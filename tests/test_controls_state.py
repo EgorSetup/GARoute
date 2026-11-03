@@ -51,6 +51,17 @@ def test_mutation_choice() -> None:
     assert state.config.ga.mutation_method == "B"
 
 
+def test_stagnation_controls() -> None:
+    state = UIState()
+    assert apply_setting_change(state, propose_setting_change(state, "stagnation_enabled", True))
+    assert apply_setting_change(state, propose_setting_change(state, "stagnation_window", 3))
+    assert apply_setting_change(state, propose_setting_change(state, "random_weight_strength", 0.5))
+    assert (state.config.ga.stagnation_enabled, state.config.ga.stagnation_window,
+            state.config.ga.random_weight_strength) == (True, 3, 0.5)
+    assert propose_setting_change(state, "stagnation_enabled", "yes").errors
+    assert propose_setting_change(state, "stagnation_window", 0).errors
+    assert propose_setting_change(state, "random_weight_strength", 0).errors
+
 def test_bad_input_does_not_change_state() -> None:
     state = UIState()
     invalid = propose_setting_change(state, "elite_count", 10)

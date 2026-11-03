@@ -90,8 +90,9 @@ INTEGER_FIELDS = {
     "population_size", "elite_count", "max_generations", "max_copies",
     "attempts_per_slot", "tournament_size", "min_waypoints", "max_waypoints",
     "seed",
+    "stagnation_window",
 }
-FLOAT_FIELDS = {"initial_length_factor", "segment_length_m"}
+FLOAT_FIELDS = {"initial_length_factor", "segment_length_m", "random_weight_strength"}
 PERCENT_FIELDS = {
     "crossover_percent": "crossover_probability",
     "mutation_percent": "mutation_probability",
@@ -119,7 +120,11 @@ def _numeric_input(value: object) -> float | None:
 def propose_setting_change(state: UIState, key: str, value: object) -> PendingChange:
     """Проверить изменение, не затрагивая действующие настройки."""
 
-    if key == "mutation_method":
+    if key == "stagnation_enabled":
+        if type(value) is not bool:
+            return PendingChange(key, value, None, ("stagnation_enabled: нужно да/нет",))
+        parsed = value
+    elif key == "mutation_method":
         parsed = value
     elif key == "seed" and value in (None, ""):
         parsed = None
@@ -597,6 +602,8 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
                 old *= 100
             if key == "mutation_method":
                 restore = lambda previous=old: mutation_select.set_value(previous)
+            elif key == "stagnation_enabled":
+                restore = lambda previous=old: stagnation_switch.set_value(previous)
             else:
                 restore = lambda field=key, previous=old: widgets[field].set_value(previous)
             submit(pending, restore, lambda: None)
@@ -650,15 +657,14 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
         ui.label("Стагнация означает отсутствие улучшения, а не найденный оптимум.").classes(
             "panel-copy"
         )
-        ui.switch("Останавливать при стагнации").disable().tooltip(
-            "Переключатель заработает после подключения полного цикла поколений"
+        stagnation_switch = ui.switch(
+            "Останавливать при стагнации", value=ga.stagnation_enabled,
+            on_change=lambda event: change("stagnation_enabled", event.value),
         )
-        ui.number("Окно стагнации (Q06 VERIFY)", value=ga.stagnation_window).props(
-            "outlined dense disable"
-        ).classes("setting-field")
-        ui.number("Сила случайных весов (Q06 VERIFY)", value=ga.random_weight_strength).props(
-            "outlined dense disable"
-        ).classes("setting-field")
+        add_number("stagnation_window", "Окно стагнации (Q06 VERIFY)",
+                   ga.stagnation_window, minimum=1)
+        add_number("random_weight_strength", "Сила случайных весов (Q06 VERIFY)",
+                   ga.random_weight_strength, minimum=0, step=0.1)
         ui.label("Рабочие значения исходного чата: 10 поколений и множитель 0,5–2; проверка продолжается.").classes("panel-copy")
 
     def reset() -> None:
@@ -670,6 +676,7 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
                 value = getattr(defaults, PERCENT_FIELDS.get(key, key))
                 widget.set_value(value * 100 if key in PERCENT_FIELDS else value)
             mutation_select.set_value(defaults.mutation_method)
+            stagnation_switch.set_value(defaults.stagnation_enabled)
             error_label.set_text("")
 
         submit(pending, lambda: None, update_widgets)

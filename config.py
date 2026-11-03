@@ -177,6 +177,8 @@ def _check_ga(config: GAConfig, errors: list[str], unresolved: list[str]) -> Non
         unresolved.append("Q06-C: окно стагнации не согласовано")
     elif not _integer_at_least(config.stagnation_window, 1):
         errors.append("stagnation_window должен быть положительным целым")
+    if type(config.stagnation_enabled) is not bool:
+        errors.append("stagnation_enabled должен быть логическим значением")
 
 
 def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[str]) -> None:

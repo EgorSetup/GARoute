@@ -1,20 +1,30 @@
-"""Одна смена поколения без производственной оценки и без ремонта."""
+"""Смена поколения и конечный запуск со снимком условий и полной историей."""
 
 from collections import Counter
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field, replace
 from math import isfinite
 from random import Random
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
+from algorithm.evaluation.fitness import (
+    TimeModel, calculate_length, calculate_travel_time, check_easy_constraints,
+    compute_easy_references, evaluate_cost, resolve_preset, unknown_required_speeds,
+)
+from algorithm.evaluation.normalization import NormalizationScales, compute_scales, validate_manual_scales
+from algorithm.evaluation.penalties import (
+    PenaltyPolicy, calculate_complexity, calculate_penalties, extract_penalty_events,
+)
 from algorithm.genetic.crossover import crossover
-from algorithm.genetic.initialization import route_signature
+from algorithm.genetic.initialization import production_weight_strategy, route_signature
 from algorithm.genetic.mutation import MutationPolicy, mutate
 from algorithm.genetic.selection import tournament_select
 from algorithm.genetic.validation import validate_route
 from algorithm.models import (
-    EligibilityReport, GAConfig, GenerationEvent, Individual, Route, RouteContext,
-    RouteMetrics, RouteValidationReport,
+    AppConfig, EasyLimits, EdgeId, EligibilityReport, GAConfig, GenerationEvent,
+    Individual, RoadEdge, Route, RouteContext, RouteMetrics, RouteValidationReport,
 )
+from config import validate_config
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +76,35 @@ class GenerationSnapshot:
     best_index: int
     stats: OperationStats
     events: tuple[GenerationEvent, ...]
+    generation: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RunInput:
+    """Переданные условия; при запуске граф и дороги копируются один раз."""
+
+    initial_population: tuple[Route, ...]
+    config: AppConfig
+    routes: RouteContext
+    roads: Mapping[EdgeId, RoadEdge]
+    traffic_levels: Mapping[EdgeId, int] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """Успешный результат или диагностическая история failed без подмены статуса."""
+
+    status: str
+    stop_reason: str
+    history: tuple[GenerationSnapshot, ...]
+    best: Individual | None
+    scales: NormalizationScales | None
+    error: str | None = None
+    failed_generation: GenerationResult | None = None
+
+    @property
+    def transitions(self) -> int:
+        return max(0, len(self.history) - 1)
 
 
 def summarize_events(events: Sequence[GenerationEvent]) -> OperationStats:
@@ -92,6 +131,7 @@ def summarize_events(events: Sequence[GenerationEvent]) -> OperationStats:
 def snapshot_generation(
     population: Sequence[Individual], stats: OperationStats,
     events: Sequence[GenerationEvent],
+    generation: int = 0,
 ) -> GenerationSnapshot:
     """Скопировать полную принятую популяцию с J/L/T/C и метаданными событий."""
 
@@ -115,7 +155,8 @@ def snapshot_generation(
         event.kind, tuple(event.parents), event.child_index, event.changed,
         event.accepted, tuple(event.reasons), event.origin,
     ) for event in events)
-    return GenerationSnapshot(tuple(copied), min(range(len(copied)), key=lambda i: copied[i].j), stats, copied_events)
+    return GenerationSnapshot(tuple(copied), min(range(len(copied)), key=lambda i: copied[i].j),
+                              stats, copied_events, generation)
 
 
 def process_invalid_candidate(candidate: Route, report: RouteValidationReport) -> None:
@@ -273,3 +314,118 @@ def build_next_generation(
     events.extend(GenerationEvent("retired", (index,), origin="retired")
                   for index in range(len(current)) if index not in elite_indices)
     return result()
+
+
+def should_stop(history: Sequence[GenerationSnapshot], config: GAConfig) -> str | None:
+    """Сначала жёсткий предел переходов, затем включённая стагнация по строгому J."""
+
+    if not history:
+        return None
+    transitions = len(history) - 1
+    if transitions >= config.max_generations:
+        return "generation_limit"
+    if not config.stagnation_enabled:
+        return None
+    best = history[0].population[history[0].best_index].j
+    last_improvement = 0
+    for index, snapshot in enumerate(history[1:], 1):
+        current = snapshot.population[snapshot.best_index].j
+        if current < best:
+            best, last_improvement = current, index
+    return "stagnation" if transitions - last_improvement >= config.stagnation_window else None
+
+
+def run_evolution(run_input: RunInput) -> RunResult:
+    """Оценить P0 и выполнить не более G_max переходов на копии условий."""
+
+    def failed(reason: str, detail: str, history=(), best=None, scales=None,
+               generation=None) -> RunResult:
+        return RunResult("failed", reason, tuple(history), best, scales, detail, generation)
+
+    report = validate_config(run_input.config)
+    if not report.ready_for_run:
+        return failed("invalid_input", "; ".join((*report.errors, *report.unresolved)))
+    config = run_input.config
+    ga = config.ga
+    fitness = config.fitness
+    if any(type(level) is not int or not 1 <= level <= 11
+           for level in run_input.traffic_levels.values()):
+        return failed("invalid_input", "invalid traffic level")
+    history: list[GenerationSnapshot] = []
+    best: Individual | None = None
+    scales: NormalizationScales | None = None
+    try:
+        graph = deepcopy(run_input.routes.graph)
+        roads = deepcopy(dict(run_input.roads))
+        levels = dict(run_input.traffic_levels)
+        closed = frozenset(run_input.routes.closed_edges) | frozenset(
+            edge_id for edge_id, level in levels.items() if level == 11
+        )
+        routes = replace(run_input.routes, graph=graph, closed_edges=closed)
+        time_model = TimeModel(roads, levels)
+        penalties = PenaltyPolicy(roads)
+        unknown = unknown_required_speeds(routes, time_model)
+        if unknown:
+            return failed("unknown_required_speeds", f"{len(unknown)} рёбер: {unknown[:5]!r}")
+        initial = tuple(Route(tuple(route.edges)) for route in run_input.initial_population)
+        if len(initial) != ga.population_size:
+            return failed("invalid_initial_population", "P0 must contain exactly N routes")
+        if max(Counter(route_signature(route) for route in initial).values()) > ga.max_copies:
+            return failed("invalid_initial_population", "P0 exceeds max copies")
+
+        def measure(route: Route) -> RouteMetrics:
+            length = calculate_length(route, routes, time_model)
+            time = calculate_travel_time(route, routes, time_model)
+            events = extract_penalty_events(route, routes, penalties)
+            breakdown = calculate_penalties(events, fitness.penalties)
+            return RouteMetrics(length, time, calculate_complexity(breakdown))
+
+        initial_metrics = tuple(measure(route) for route in initial)
+        easy_references = compute_easy_references(routes, time_model) if fitness.preset == "easy" else None
+        easy_limits = EasyLimits(fitness.easy_length_delta, fitness.easy_time_delta)
+        eligible = (lambda metrics: check_easy_constraints(metrics, easy_references, easy_limits)) if (
+            fitness.preset == "easy") else None
+        if eligible is not None and any(not eligible(metrics).eligible for metrics in initial_metrics):
+            return failed("invalid_initial_population", "P0 contains route outside easy limits")
+
+        if fitness.normalization_mode == "auto":
+            scales = compute_scales(initial_metrics)
+        else:
+            scales = NormalizationScales(
+                fitness.time_reference_s, fitness.length_reference_m, fitness.complexity_reference,
+            )
+            if validate_manual_scales(scales).errors:
+                return failed("invalid_input", "invalid manual scales")
+        weights = resolve_preset(fitness.preset, fitness.weights)
+
+        def evaluate(route: Route) -> Individual:
+            metrics = measure(route)
+            return Individual(route, evaluate_cost(metrics, weights, scales), metrics)
+
+        population = tuple(Individual(route, evaluate_cost(metrics, weights, scales), metrics)
+                           for route, metrics in zip(initial, initial_metrics))
+        events = tuple(GenerationEvent("admission", (), index, accepted=True, origin="initial")
+                       for index in range(len(population)))
+        history = [snapshot_generation(population, summarize_events(events), events, generation=0)]
+        best = history[0].population[history[0].best_index]
+        generation_context = GenerationContext(
+            routes, ga, MutationPolicy(production_weight_strategy(ga.random_weight_strength)), eligible,
+        )
+        rng = Random(ga.seed)
+        while (stop := should_stop(history, ga)) is None:
+            step = build_next_generation(population, generation_context, rng, evaluate)
+            if step.error is not None:
+                return failed("generation_failed", step.error, history, best, scales, step)
+            if len(step.population) != ga.population_size:
+                return failed("generation_failed", "generation size differs from N", history, best, scales, step)
+            snapshot = snapshot_generation(step.population, summarize_events(step.events),
+                                           step.events, generation=len(history))
+            history.append(snapshot)
+            population = step.population
+            candidate = snapshot.population[snapshot.best_index]
+            if candidate.j < best.j:
+                best = candidate
+        return RunResult("completed", stop, tuple(history), best, scales)
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        reason = "generation_failed" if history else "invalid_input"
+        return failed(reason, str(error), history, best, scales)

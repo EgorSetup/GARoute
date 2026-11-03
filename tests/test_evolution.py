@@ -7,13 +7,18 @@ import pytest
 
 from algorithm.genetic.evolution import (
     GenerationContext,
+    RunInput,
     build_next_generation,
     process_invalid_candidate,
+    run_evolution,
+    should_stop,
 )
 from algorithm.genetic.initialization import generate_initial_population
+from algorithm.evaluation.fitness import resolve_preset
 from algorithm.genetic.mutation import MutationPolicy
 from algorithm.genetic.validation import validate_route
-from algorithm.models import GAConfig, Individual, Route, RouteContext
+from algorithm.models import GAConfig, Individual, RoadEdge, Route, RouteContext
+from config import default_config
 
 
 def length_weight(edge, attributes, rng):
@@ -43,6 +48,77 @@ def run_context(context: RouteContext, **changes) -> GenerationContext:
                    attempts_per_slot=20, tournament_size=2)
     config = replace(base, **changes)
     return GenerationContext(context, config, MutationPolicy(length_weight))
+
+
+def production_input(context: RouteContext, **ga_changes) -> RunInput:
+    """Полный производственный расчёт на малом известном графе."""
+
+    ga_values = dict(population_size=4, elite_count=1, max_copies=4,
+                     attempts_per_slot=20, tournament_size=2, max_generations=3,
+                     crossover_probability=0, mutation_probability=0, seed=7)
+    ga_values.update(ga_changes)
+    ga = replace(GAConfig(), **ga_values)
+    base = default_config()
+    fitness = replace(base.fitness, preset="short", weights=resolve_preset("short"),
+                      normalization_mode="auto")
+    roads = {}
+    for u, v, key, attributes in context.graph.edges(keys=True, data=True):
+        edge_id = (u, v, key)
+        roads[edge_id] = RoadEdge(edge_id, ((0.0, 0.0), (0.001, 0.001)),
+                                  "test", attributes["length"], "test", (1,), {},
+                                  36.0, "observed", "maxspeed", None, "36")
+    return RunInput(tuple(person.route for person in known_population(context)),
+                    replace(base, ga=ga, fitness=fitness), context, roads)
+
+
+def test_generation_zero_and_max_transitions(route_context: RouteContext) -> None:
+    run = run_evolution(production_input(route_context))
+    assert run.status == "completed" and run.stop_reason == "generation_limit", run.error
+    assert run.transitions == 3
+    assert [snapshot.generation for snapshot in run.history] == [0, 1, 2, 3]
+    assert all(len(snapshot.population) == 4 for snapshot in run.history)
+    assert all(snapshot.population[snapshot.best_index].j == run.best.j
+               for snapshot in run.history)
+
+
+def test_stagnation_on_off(route_context: RouteContext) -> None:
+    enabled = run_evolution(production_input(route_context, stagnation_enabled=True,
+                                             stagnation_window=2, max_generations=5))
+    disabled = run_evolution(production_input(route_context, stagnation_enabled=False,
+                                              stagnation_window=2, max_generations=5))
+    assert enabled.status == disabled.status == "completed"
+    assert (enabled.stop_reason, enabled.transitions) == ("stagnation", 2)
+    assert (disabled.stop_reason, disabled.transitions) == ("generation_limit", 5)
+
+
+def test_repeatable_seed_and_frozen_history(route_context: RouteContext) -> None:
+    run_input = production_input(route_context, crossover_probability=1,
+                                 mutation_probability=1, max_generations=2)
+    first = run_evolution(run_input)
+    second = run_evolution(run_input)
+    assert first.status == second.status == "completed"
+    assert first.history == second.history
+    assert first.best == second.best
+    assert first.history[0].population[0].route == run_input.initial_population[0]
+
+
+def test_partial_failure_preserves_only_complete_history(route_context: RouteContext) -> None:
+    run = run_evolution(production_input(route_context, max_copies=1,
+                                         attempts_per_slot=1))
+    assert run.status == "failed" and run.stop_reason == "generation_failed"
+    assert run.history and run.history[0].generation == 0
+    assert run.failed_generation is not None
+    assert run.failed_generation.population == ()
+
+
+def test_unknown_speed_blocks_production(route_context: RouteContext) -> None:
+    run_input = production_input(route_context)
+    roads = dict(run_input.roads)
+    edge_id = (1, 2, 0)
+    roads[edge_id] = replace(roads[edge_id], speed_kph=None, speed_status="unknown")
+    run = run_evolution(replace(run_input, roads=roads))
+    assert run.status == "failed" and run.stop_reason == "unknown_required_speeds"
+    assert run.history == ()
 
 
 def test_known_route_costs(route_context: RouteContext) -> None:
