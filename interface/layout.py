@@ -158,9 +158,36 @@ def _build_header(state: UIState, open_results) -> None:
 
             state.refresh_run = refresh
             refresh()
-            _disabled_button("Воспроизвести", "Расчёты ещё не выполнены", "play_arrow")
-            _disabled_button("Шаг назад", "Расчёты ещё не выполнены", "skip_previous")
-            _disabled_button("Шаг вперёд", "Расчёты ещё не выполнены", "skip_next")
+            play_top = ui.button(
+                "Воспроизвести", on_click=lambda: state.playback_action("play")
+                if state.playback_action is not None else None, icon="play_arrow",
+            ).props("outline dense").disable()
+            back_top = ui.button(
+                "Шаг назад", on_click=lambda: state.playback_action("back")
+                if state.playback_action is not None else None, icon="skip_previous",
+            ).props("outline dense").disable()
+            next_top = ui.button(
+                "Шаг вперёд", on_click=lambda: state.playback_action("next")
+                if state.playback_action is not None else None, icon="skip_next",
+            ).props("outline dense").disable()
+
+            def refresh_playback_header() -> None:
+                playback = state.playback
+                count = playback.generation_count
+                if count > 1 and not playback.playing:
+                    play_top.enable()
+                else:
+                    play_top.disable()
+                if count and playback.generation_index > 0:
+                    back_top.enable()
+                else:
+                    back_top.disable()
+                if count and playback.generation_index < count - 1:
+                    next_top.enable()
+                else:
+                    next_top.disable()
+
+            state.refresh_playback_header = refresh_playback_header
 
 
 def _build_left_panel(state: UIState) -> tuple[Input, Input]:

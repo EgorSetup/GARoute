@@ -10,6 +10,7 @@ from algorithm.evaluation.fitness import TimeModel, unknown_required_speeds
 from algorithm.models import RouteContext
 from config import validate_config
 from interface.controls import UIState
+from visualization.animation import load_history
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +82,9 @@ def apply_run_completion(state: UIState, run_id: str, outcome: RunResult) -> boo
         state.run_results.append(outcome)
         state.generation_history = list(outcome.history)
         state.selected_run_id = run_id
+        load_history(state.playback, state.generation_history)
     if state.refresh_run is not None:
         state.refresh_run()
+    if outcome.status == "completed" and state.refresh_playback is not None:
+        state.refresh_playback()
     return True

@@ -176,6 +176,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
         map_element = ui.leaflet(center=center, zoom=13).classes("map-canvas")
         markers: dict[str, object] = {}
         population_layers: list[object] = []
+        playback_layers: list[object] = []
         segment_layers: dict[str, object] = {}
         rendered_levels: dict[str, int] = {}
 
@@ -189,6 +190,20 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 state.refresh_traffic_controls()
 
         state.refresh_traffic = refresh_traffic
+
+        def show_generation_frame(snapshot) -> None:
+            for layer in playback_layers:
+                map_element.remove_layer(layer)
+            playback_layers.clear()
+            if snapshot is None or state.normalized_roads is None:
+                return
+            for layer in population_layers:
+                map_element.remove_layer(layer)
+            population_layers.clear()
+            routes = tuple(individual.route for individual in snapshot.population)
+            playback_layers.extend(render_population(map_element, routes, state.normalized_roads))
+
+        state.show_generation_frame = show_generation_frame
 
         def clear_population() -> None:
             for layer in population_layers:

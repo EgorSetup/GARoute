@@ -34,9 +34,14 @@ def test_single_run_frozen_inputs_and_stale_completion_ignored(route_context: Ro
     outcome = run_evolution(handle.run_input)
     assert not apply_run_completion(state, "old-id", outcome)
     assert state.active_run_id == handle.run_id
+    refreshed = []
+    state.refresh_playback = lambda: refreshed.append(state.playback.generation_index)
     assert apply_run_completion(state, handle.run_id, outcome)
     assert state.run_status == "completed" and len(state.run_results) == 1
     assert len(state.generation_history) == len(outcome.history)
+    assert state.playback.generation_count == len(outcome.history)
+    assert state.playback.generation_index == 0 and not state.playback.playing
+    assert refreshed == [0]
 
 
 def test_failure_not_success(route_context: RouteContext) -> None:

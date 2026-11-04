@@ -1,5 +1,7 @@
 """Пустой каркас результатов и воспроизведения без вымышленных запусков."""
 
+from time import monotonic
+
 from nicegui import ui
 
 from algorithm.genetic.initialization import PopulationResult
@@ -11,6 +13,7 @@ from algorithm.models import RouteMetrics
 from config import penalty_catalog
 from interface.controls import RoutePreview, UIState
 from visualization.charts import render_empty_charts
+from visualization.animation import advance, pause, play, seek, set_index, set_playback_speed
 
 
 def _disabled_playback_button(label: str, icon: str) -> None:
@@ -70,29 +73,138 @@ def render_route_metrics(metrics: RoutePreview, breakdown: PenaltyBreakdown,
 
 
 def build_playback_controls(state: UIState) -> None:
-    """Разместить все команды перемотки, заблокировав их без истории."""
+    """Показать сохранённые поколения без повторного вызова расчёта."""
 
     with ui.element("section").classes("results-section"):
         ui.label("Воспроизведение поколений").classes("panel-heading")
-        if not state.playback.has_history:
-            ui.label("Истории поколений нет. Перемотка станет доступна после расчёта.").classes(
-                "panel-copy"
-            )
+        summary = ui.label("Истории поколений нет. Перемотка станет доступна после расчёта.").classes(
+            "panel-copy"
+        )
+        last_tick = [monotonic()]
+        rendered: list[tuple[int, int] | None] = [None]
+
+        def move(index: int) -> None:
+            if not state.generation_history:
+                return
+            set_index(state.playback, state.generation_history, index)
+            refresh()
+
+        def start() -> None:
+            play(state.playback)
+            last_tick[0] = monotonic()
+            refresh()
+
+        def stop() -> None:
+            pause(state.playback)
+            refresh()
+
+        def step(delta: int) -> None:
+            if state.generation_history:
+                move(max(0, min(len(state.generation_history) - 1,
+                                state.playback.generation_index + delta)))
+
+        def header_action(action: str) -> None:
+            if action == "play":
+                start()
+            elif action == "back":
+                step(-1)
+            elif action == "next":
+                step(1)
+
+        state.playback_action = header_action
+
         with ui.element("div").classes("playback-actions"):
-            _disabled_playback_button("В начало", "first_page")
-            _disabled_playback_button("Шаг назад", "skip_previous")
-            _disabled_playback_button("Воспроизвести", "play_arrow")
-            _disabled_playback_button("Пауза", "pause")
-            _disabled_playback_button("Шаг вперёд", "skip_next")
-            _disabled_playback_button("В конец", "last_page")
-        ui.label("Поколение: нет данных").classes("panel-copy")
-        ui.slider(min=0, max=max(1, state.playback.generation_count - 1), value=0).disable().classes(
+            first_button = ui.button("В начало", on_click=lambda: move(0), icon="first_page").props("outline dense")
+            back_button = ui.button("Шаг назад", on_click=lambda: step(-1), icon="skip_previous").props("outline dense")
+            play_button = ui.button("Воспроизвести", on_click=start, icon="play_arrow").props("outline dense")
+            pause_button = ui.button("Пауза", on_click=stop, icon="pause").props("outline dense")
+            next_button = ui.button("Шаг вперёд", on_click=lambda: step(1), icon="skip_next").props("outline dense")
+            last_button = ui.button("В конец", on_click=lambda: move(len(state.generation_history) - 1),
+                                    icon="last_page").props("outline dense")
+        frame_label = ui.label("Поколение: нет данных").classes("panel-copy")
+        slider = ui.slider(
+            min=0, max=1, value=0,
+            on_change=lambda e: move(int(e.value)) if e.value is not None
+            and int(e.value) != state.playback.generation_index else None,
+        ).disable().classes(
             "w-full"
         )
-        ui.select(
-            {0.5: "0,5×", 1.0: "1×", 2.0: "2×"}, label="Скорость воспроизведения",
-            value=None,
-        ).props("outlined dense disable").classes("setting-field")
+
+        def change_speed(e) -> None:
+            try:
+                set_playback_speed(state.playback, e.value)
+            except ValueError:
+                speed_input.set_value(state.playback.speed)
+
+        speed_input = ui.number(
+            "Скорость, ×", value=state.playback.speed, step=0.5,
+            on_change=change_speed,
+        ).props("outlined dense").classes("setting-field")
+
+        def refresh() -> None:
+            history = state.generation_history
+            count = len(history)
+            state.playback.generation_count = count
+            if not count:
+                summary.set_text("Истории поколений нет. Перемотка станет доступна после расчёта.")
+                frame_label.set_text("Поколение: нет данных")
+                for button in (first_button, back_button, play_button, pause_button,
+                               next_button, last_button):
+                    button.disable()
+                slider.disable()
+                if rendered[0] is not None and state.show_generation_frame is not None:
+                    state.show_generation_frame(None)
+                rendered[0] = None
+                if state.refresh_playback_header is not None:
+                    state.refresh_playback_header()
+                return
+            index = state.playback.generation_index
+            frame = seek(history, index)
+            snapshot = frame.snapshot
+            best = snapshot.population[snapshot.best_index]
+            summary.set_text(
+                f"Поколение {snapshot.generation} · особей {len(snapshot.population)} · "
+                f"лучший J={best.j:.4f} · принято {snapshot.stats.accepted}, "
+                f"отклонено {snapshot.stats.rejected_candidates}"
+            )
+            frame_label.set_text(f"Поколение: {index} из {count - 1}")
+            slider.props(f"max={max(1, count - 1)}")
+            if slider.value != index:
+                slider.set_value(index)
+            slider.enable()
+            for button in (first_button, back_button, play_button, pause_button,
+                           next_button, last_button):
+                button.enable()
+            if index == 0:
+                first_button.disable()
+                back_button.disable()
+            if index == count - 1:
+                next_button.disable()
+                last_button.disable()
+            if state.playback.playing:
+                play_button.disable()
+            else:
+                pause_button.disable()
+            if count <= 1:
+                play_button.disable()
+            key = (id(history), index)
+            if key != rendered[0]:
+                if state.show_generation_frame is not None:
+                    state.show_generation_frame(snapshot)
+                rendered[0] = key
+            if state.refresh_playback_header is not None:
+                state.refresh_playback_header()
+
+        def on_tick() -> None:
+            now = monotonic()
+            elapsed = now - last_tick[0]
+            last_tick[0] = now
+            if advance(state.playback, elapsed):
+                refresh()
+
+        state.refresh_playback = refresh
+        ui.timer(0.1, on_tick)
+        refresh()
 
 
 def build_results_panel(state: UIState) -> None:
