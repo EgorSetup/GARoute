@@ -19,6 +19,17 @@ from visualization.animation import (
 )
 
 
+def generation_failure_detail(outcome: RunResult) -> str | None:
+    """Показать причину неполного поколения без выдачи его за результат."""
+
+    step = outcome.failed_generation
+    if step is None:
+        return None
+    reasons = ", ".join(f"{name}: {count}" for name, count in step.rejections) or "не указаны"
+    return (f"Попыток: {step.attempts}; принято {step.accepted_count}; "
+            f"причины отказов: {reasons}. Попробуйте другой seed или параметры ГА.")
+
+
 def _disabled_playback_button(label: str, icon: str) -> None:
     button = ui.button(label, icon=icon).props("outline dense").disable()
     button.tooltip("История поколений пока отсутствует")
@@ -314,6 +325,9 @@ def build_results_panel(state: UIState) -> None:
             elif isinstance(outcome, RunResult):
                 ui.label("Расчёт не завершён").classes("panel-heading")
                 ui.label(f"{outcome.stop_reason}: {outcome.error or 'нет подробностей'}").classes("setting-error")
+                detail = generation_failure_detail(outcome)
+                if detail is not None:
+                    ui.label(detail).classes("setting-error")
                 if outcome.history:
                     ui.label(f"Сохранено полных поколений для диагностики: {len(outcome.history)}").classes("panel-copy")
             else:

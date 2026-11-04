@@ -151,7 +151,10 @@ def _build_header(state: UIState, open_results) -> None:
                 if state.run_status == "running":
                     status.set_text("Идёт расчёт…")
                 elif state.run_error:
-                    status.set_text(f"Расчёт недоступен: {state.run_error}")
+                    if state.run_error == "attempts_exhausted":
+                        status.set_text("Не удалось заполнить поколение за ограниченное число попыток")
+                    else:
+                        status.set_text(f"Расчёт недоступен: {state.run_error}")
                 elif state.run_status == "completed":
                     status.set_text("Расчёт завершён")
                 else:

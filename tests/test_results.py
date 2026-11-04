@@ -10,6 +10,7 @@ from algorithm.models import RouteContext
 from data.road_graph import NormalizedRoadData
 from interface.controls import UIState
 from interface.run_state import apply_run_completion, select_run, set_run_visibility, start_run
+from interface.results import generation_failure_detail
 from test_evolution import production_input
 
 
@@ -50,6 +51,14 @@ def test_presets_accumulate(route_context: RouteContext) -> None:
     assert [run.config.fitness.preset for run in state.saved_runs] == ["short", "fast"]
     assert state.saved_runs[0].outcome.history[0].population[0].route == state.saved_runs[1].outcome.history[0].population[0].route
     assert state.saved_runs[0].outcome.scales == state.saved_runs[1].outcome.scales == state.base_scales
+
+
+def test_failed_generation_explains_attempts(route_context: RouteContext) -> None:
+    outcome = run_evolution(production_input(route_context, max_copies=1, attempts_per_slot=1))
+    assert outcome.status == "failed" and outcome.failed_generation is not None
+    detail = generation_failure_detail(outcome)
+    assert detail is not None and "Попыток:" in detail and "принято" in detail
+    assert "причины отказов:" in detail and "seed" in detail
 
 
 def test_run_metadata(route_context: RouteContext) -> None:
