@@ -5,7 +5,7 @@ from collections import Counter
 from math import fsum, isfinite
 from random import Random
 from secrets import randbits
-from typing import Callable, Hashable, Mapping
+from typing import Callable, Hashable, Mapping, Sequence
 
 from algorithm.genetic.validation import validate_route
 from algorithm.models import EdgeId, EligibilityReport, GAConfig, Route, RouteContext, ValidationReport
@@ -168,8 +168,9 @@ def generate_initial_population(
     rng: Random,
     weight_strategy: WeightStrategy,
     eligible: Callable[[Route], EligibilityReport] | None = None,
+    initial_routes: Sequence[Route] = (),
 ) -> PopulationResult:
-    """Заполнить N мест с конечным числом попыток на каждое место."""
+    """Сохранить пригодные базовые маршруты и заполнить N конечными попытками."""
 
     if any(type(value) is not int or value < 1 for value in (
         config.population_size, config.max_copies, config.attempts_per_slot,
@@ -189,7 +190,40 @@ def generate_initial_population(
     copies: Counter[tuple[EdgeId, ...]] = Counter()
     rejections: Counter[str] = Counter()
     attempts = 0
-    for _ in range(config.population_size):
+    for route in initial_routes:
+        if len(accepted) >= config.population_size:
+            break
+        report = validate_route(route, context)
+        if not report.valid:
+            rejections["invalid_base_route"] += 1
+            continue
+        try:
+            length = fsum(float(context.graph[u][v][key]["length"]) for u, v, key in route.edges)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            rejections["invalid_base_length"] += 1
+            continue
+        if not check_initial_length(length, policy).is_valid:
+            rejections["base_length_limit"] += 1
+            continue
+        if eligible is not None:
+            try:
+                eligibility = eligible(route)
+            except (ValueError, TypeError, ArithmeticError, KeyError):
+                rejections["base_eligibility_error"] += 1
+                continue
+            if not isinstance(eligibility, EligibilityReport):
+                rejections["base_eligibility_error"] += 1
+                continue
+            if not eligibility.eligible:
+                rejections.update(eligibility.reasons or ("ineligible_base_route",))
+                continue
+        signature = route_signature(route)
+        if copies[signature] >= config.max_copies:
+            rejections["base_duplicate_limit"] += 1
+            continue
+        accepted.append(route)
+        copies[signature] += 1
+    for _ in range(config.population_size - len(accepted)):
         for _ in range(config.attempts_per_slot):
             attempts += 1
             candidate = generate_candidate(context, config, rng, weight_strategy)

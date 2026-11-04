@@ -33,6 +33,7 @@ from interface.controls import (
     propose_traffic_edit, reset_traffic, select_endpoint,
 )
 from interface.results import population_status_text
+from interface.run_state import SavedRun
 from visualization.animation import Frame, frame_layers
 
 
@@ -205,6 +206,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
         markers: dict[str, object] = {}
         population_layers: list[object] = []
         playback_layers: list[object] = []
+        run_layers: list[object] = []
         segment_layers: dict[str, object] = {}
         rendered_levels: dict[str, int] = {}
 
@@ -218,6 +220,26 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 state.refresh_traffic_controls()
 
         state.refresh_traffic = refresh_traffic
+
+        def refresh_run_overlays() -> None:
+            clear_run_layers(map_element, run_layers)
+            if state.normalized_roads is None:
+                return
+            for record in state.saved_runs:
+                if not isinstance(record, SavedRun) or not record.visible or record.outcome.best is None:
+                    continue
+                feature = {"type": "Feature", "geometry": {
+                    "type": "LineString",
+                    "coordinates": route_geometry(record.outcome.best.route, state.normalized_roads),
+                }}
+                run_layers.append(map_element.generic_layer(
+                    name="geoJSON", args=[feature, {"style": {
+                        "color": record.color, "weight": 4, "opacity": 0.6,
+                        "interactive": False,
+                    }}],
+                ))
+
+        state.refresh_run_overlays = refresh_run_overlays
 
         def show_generation_frame(frame: Frame | None) -> None:
             if frame is None or state.normalized_roads is None:
@@ -445,9 +467,29 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     start, end = state.endpoint_a, state.endpoint_b
                     app_config = state.config
                     config = app_config.ga
-                    seed_used = choose_seed(config.seed)
+                    seed_used = state.base_seed_used if state.base_seed_used is not None else choose_seed(config.seed)
                     context = RouteContext(graph, start, end, state.turn_rules)
                     time_model = TimeModel(roads.edges, dict(state.traffic_levels))
+                    base = state.base_population
+                    if not isinstance(base, PopulationResult) or base.error is not None:
+                        try:
+                            base = await asyncio.to_thread(
+                                generate_initial_population, context, config, Random(seed_used),
+                                production_weight_strategy(config.random_weight_strength),
+                            )
+                        except (ValueError, OverflowError) as error:
+                            population_label.set_text(f"Базовая P0 не сформирована: {error}")
+                            finish()
+                            return
+                        if base.error is not None:
+                            population_label.set_text(population_status_text(base))
+                            finish()
+                            return
+                        if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
+                            finish()
+                            return
+                        state.base_population = base
+                        state.base_seed_used = seed_used
                     easy_preflight = None
                     eligible = None
                     if app_config.fitness.preset == "easy":
@@ -479,10 +521,12 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                             )
                             return check_easy_constraints(metrics, easy_preflight, limits)
                     try:
-                        result = await asyncio.to_thread(
-                            generate_initial_population, context, config, Random(seed_used),
+                        result = (await asyncio.to_thread(
+                            generate_initial_population, context, config,
+                            Random(seed_used ^ 0x9E3779B97F4A7C15),
                             production_weight_strategy(config.random_weight_strength), eligible,
-                        )
+                            base.population,
+                        ) if eligible is not None else base)
                     except (ValueError, OverflowError) as error:
                         population_label.set_text(f"P0 не сформирована: {error}")
                         finish()
@@ -495,7 +539,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     complexity_error = None
                     scales = None
                     scale_error = None
-                    easy_refs = None
+                    easy_refs = easy_preflight
                     easy_error = None
                     if result.error is None and app_config.fitness.penalties is not None:
                         def evaluate_p0():
@@ -544,16 +588,36 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                             breakdowns, previews, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
                         except (ValueError, KeyError, OverflowError) as error:
                             complexity_error = str(error)
+                    base_scales = state.base_scales
+                    if base_scales is None and result is base:
+                        base_scales = scales
+                    elif base_scales is None and app_config.fitness.penalties is not None:
+                        def evaluate_base_scales():
+                            policy = PenaltyPolicy(roads.edges)
+                            metrics = tuple(RouteMetrics(
+                                calculate_length(route, context, time_model),
+                                calculate_travel_time(route, context, time_model),
+                                calculate_complexity(calculate_penalties(
+                                    extract_penalty_events(route, context, policy),
+                                    app_config.fitness.penalties,
+                                )),
+                            ) for route in base.population)
+                            return compute_scales(metrics)
+                        try:
+                            base_scales = await asyncio.to_thread(evaluate_base_scales)
+                        except (ValueError, KeyError, OverflowError):
+                            pass
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
                         finish()
                         return
                     clear_population()
                     state.initial_population = result
+                    state.base_scales = base_scales
                     state.initial_seed_used = seed_used
                     state.initial_population_preset = app_config.fitness.preset
                     state.initial_complexities = breakdowns
                     state.initial_previews = previews
-                    state.initial_scales = scales
+                    state.initial_scales = base_scales
                     state.initial_scale_error = scale_error
                     state.easy_references = easy_refs
                     state.easy_reference_error = easy_error

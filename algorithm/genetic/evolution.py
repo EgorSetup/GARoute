@@ -88,6 +88,7 @@ class RunInput:
     routes: RouteContext
     roads: Mapping[EdgeId, RoadEdge]
     traffic_levels: Mapping[EdgeId, int] = field(default_factory=dict)
+    auto_scales: NormalizationScales | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,7 +394,9 @@ def run_evolution(run_input: RunInput) -> RunResult:
             return failed("invalid_initial_population", "P0 contains route outside easy limits")
 
         if fitness.normalization_mode == "auto":
-            scales = compute_scales(initial_metrics)
+            scales = run_input.auto_scales or compute_scales(initial_metrics)
+            if validate_manual_scales(scales).errors:
+                return failed("invalid_input", "invalid shared auto scales")
         else:
             scales = NormalizationScales(
                 fitness.time_reference_s, fitness.length_reference_m, fitness.complexity_reference,

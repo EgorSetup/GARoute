@@ -46,6 +46,9 @@ class UIState:
     endpoint_a: object | None = None
     endpoint_b: object | None = None
     initial_population: object | None = None
+    base_population: object | None = None
+    base_seed_used: int | None = None
+    base_scales: NormalizationScales | None = None
     initial_population_running: bool = False
     initial_seed_used: int | None = None
     initial_population_preset: str | None = None
@@ -69,14 +72,18 @@ class UIState:
     demo_segment_clicks: int = 0
     playback: PlaybackState = field(default_factory=PlaybackState)
     run_results: list[object] = field(default_factory=list)
+    saved_runs: list[object] = field(default_factory=list)
     generation_history: list[object] = field(default_factory=list)
     chart_data: dict[str, object] = field(default_factory=dict)
     selected_run_id: str | None = None
     active_run_id: str | None = None
+    active_run_input: object | None = None
     run_status: str = "idle"
     run_error: str | None = None
     latest_run: object | None = None
     refresh_run: Callable[[], None] | None = None
+    refresh_runs: Callable[[], None] | None = None
+    refresh_run_overlays: Callable[[], None] | None = None
     highlighted_route_ids: set[str] = field(default_factory=set)
     pending_change: "PendingChange | None" = None
     pending_base_config: AppConfig | None = None
@@ -324,9 +331,11 @@ def confirm_change(state: UIState) -> UIState:
         cancel_change(state)
         return state
     state.run_results.clear()
+    state.saved_runs.clear()
     state.generation_history.clear()
     state.chart_data.clear()
     state.selected_run_id = None
+    state.active_run_input = None
     state.latest_run = None
     state.run_status = "idle"
     state.run_error = None
@@ -337,6 +346,9 @@ def confirm_change(state: UIState) -> UIState:
     if state.refresh_charts is not None:
         state.refresh_charts()
     state.initial_population = None
+    state.base_population = None
+    state.base_seed_used = None
+    state.base_scales = None
     state.initial_seed_used = None
     state.initial_population_preset = None
     state.initial_complexities = ()
@@ -355,6 +367,10 @@ def confirm_change(state: UIState) -> UIState:
         state.refresh_easy()
     if state.refresh_run is not None:
         state.refresh_run()
+    if state.refresh_runs is not None:
+        state.refresh_runs()
+    if state.refresh_run_overlays is not None:
+        state.refresh_run_overlays()
     cancel_change(state)
     return state
 

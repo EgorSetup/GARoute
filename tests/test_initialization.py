@@ -15,7 +15,7 @@ from algorithm.genetic.initialization import (
     route_signature,
 )
 from algorithm.genetic.validation import validate_route
-from algorithm.models import GAConfig, Route, RouteContext
+from algorithm.models import EligibilityReport, GAConfig, Route, RouteContext
 
 
 def by_length(edge, attributes, rng):
@@ -102,6 +102,40 @@ def test_fixed_population_size(route_context: RouteContext) -> None:
     assert result.error is None
     assert len(result.population) == result.accepted_count == 5
     assert all(validate_route(route, route_context).valid for route in result.population)
+
+
+def test_easy_derives_from_common_base_without_mutation(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=4, max_copies=4, attempts_per_slot=100)
+    base = generate_initial_population(route_context, config, Random(11), by_length)
+    assert base.error is None
+
+    def eligible(route: Route) -> EligibilityReport:
+        length = sum(route_context.graph[u][v][key]["length"] for u, v, key in route.edges)
+        return EligibilityReport(length <= 3, () if length <= 3 else ("easy_length",))
+
+    assert any(not eligible(route).eligible for route in base.population)
+
+    derived = generate_initial_population(
+        route_context, config, Random(12), by_length, eligible, base.population,
+    )
+    assert derived.error is None and len(derived.population) == 4
+    assert derived.attempts > 0
+    assert all(eligible(route).eligible for route in derived.population)
+    assert base.population == generate_initial_population(
+        route_context, config, Random(11), by_length,
+    ).population
+
+
+def test_easy_base_shortage_does_not_publish_partial_population(route_context: RouteContext) -> None:
+    config = replace(GAConfig(), population_size=3, attempts_per_slot=2)
+    base = (Route(((1, 4, 0), (4, 6, 0))),)
+    result = generate_initial_population(
+        route_context, config, FixedWaypointRng((4,)), by_length,
+        lambda route: EligibilityReport(False, ("easy_time",)), base,
+    )
+    assert result.error == "attempts_exhausted"
+    assert result.population == () and result.accepted_count == 0
+    assert dict(result.rejections)["easy_time"] >= 1
 
 
 def test_duplicate_limit(route_context: RouteContext) -> None:

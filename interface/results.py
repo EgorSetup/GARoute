@@ -12,6 +12,7 @@ from algorithm.evaluation.normalization import NormalizationScales, validate_man
 from algorithm.models import RouteMetrics
 from config import penalty_catalog
 from interface.controls import RoutePreview, UIState
+from interface.run_state import SavedRun, select_run, set_run_visibility
 from visualization.charts import render_charts
 from visualization.animation import (
     ORIGIN_COLORS, advance, pause, play, seek, set_index, set_playback_speed,
@@ -197,7 +198,7 @@ def build_playback_controls(state: UIState) -> None:
                 pause_button.disable()
             if count <= 1:
                 play_button.disable()
-            key = (id(history), index)
+            key = (state.selected_run_id or id(history), index)
             if key != rendered[0]:
                 if state.show_generation_frame is not None:
                     state.show_generation_frame(frame)
@@ -218,7 +219,7 @@ def build_playback_controls(state: UIState) -> None:
 
 
 def build_results_panel(state: UIState) -> None:
-    """Разместить будущие карточки, историю и четыре пустых графика."""
+    """Показать P0, независимые запуски, выбранную историю и четыре графика."""
 
     ui.label("Результаты").classes("panel-heading")
     with ui.element("section").classes("results-section"):
@@ -241,6 +242,10 @@ def build_results_panel(state: UIState) -> None:
             route_select.set_value(selected)
             with detail:
                 ui.label("Предварительная оценка P0, не результат эволюции.").classes("panel-copy")
+                if state.initial_population_preset == "easy":
+                    ui.label("P0 «Лёгкого»: пригодные маршруты общей базы сохранены, остальные места дозаполнены; автоэталоны серии рассчитаны по общей базе. Q07 VERIFY.").classes("panel-copy")
+                if state.initial_population_preset not in (None, state.config.fitness.preset):
+                    ui.label("Показана P0 предыдущего пресета. Для нового пресета нажмите «Показать P0»; расчёт обычного пресета использует общую базовую P0.").classes("setting-error")
                 if selected < len(state.initial_previews):
                     preview = state.initial_previews[selected]
                     fitness = state.config.fitness
@@ -319,9 +324,52 @@ def build_results_panel(state: UIState) -> None:
     render_run()
     with ui.element("section").classes("results-section"):
         ui.label("Карточки лучших маршрутов").classes("panel-heading")
-        ui.label("Пока нет запусков для сравнения: L, T, C и J не вычислены.").classes(
-            "panel-copy"
-        )
+        ui.label("Для разных пресетов сравнивайте L/T/C при общих условиях. J имеет разные веса и не образует общего рейтинга.").classes("panel-copy")
+        cards = ui.column().classes("w-full")
+
+        def render_saved_runs() -> None:
+            cards.clear()
+            with cards:
+                if not state.saved_runs:
+                    ui.label("Пока нет завершённых запусков для сравнения.").classes("panel-copy")
+                    return
+                names = {"fast": "Быстрый", "short": "Экономичный",
+                         "easy": "Лёгкий", "custom": "Пользовательский"}
+                for index, record in enumerate(state.saved_runs, start=1):
+                    if not isinstance(record, SavedRun):
+                        continue
+                    with ui.card().classes("w-full penalty-card").style(
+                        f"border-left:5px solid {record.color}"
+                    ):
+                        preset = names.get(record.config.fitness.preset, "Неизвестный")
+                        ui.label(f"Запуск {index} · {preset} · {record.run_id[:8]}").classes("penalty-title")
+                        best = record.outcome.best
+                        if best is not None and best.metrics is not None:
+                            metrics = best.metrics
+                            ui.label(f"L={metrics.length_m:.2f} м · T={metrics.time_s:.2f} с · "
+                                     f"C_observed={metrics.complexity:.2f} балла · "
+                                     f"J={best.j:.4f} (только внутри пресета)").classes("panel-copy")
+                        ui.label(f"Seed: {record.seed_used}; остановка: {record.outcome.stop_reason}; "
+                                 f"поколений: {len(record.outcome.history)}").classes("panel-copy")
+                        if record.config.fitness.weights is not None:
+                            weights = record.config.fitness.weights
+                            ui.label(f"Веса T/L/C: {weights[0]*100:g}/{weights[1]*100:g}/{weights[2]*100:g}%").classes("panel-copy")
+                        if record.outcome.scales is not None:
+                            scales = record.outcome.scales
+                            ui.label(f"Эталоны: T={scales.time_s:.2f} с, "
+                                     f"L={scales.length_m:.2f} м, C={scales.complexity:.2f}").classes("panel-copy")
+                        if record.uncertain_penalties:
+                            ui.label(f"Неподтверждённых штрафных признаков: {record.uncertain_penalties}; "
+                                     "C_observed не включает их как нули.").classes("setting-error")
+                        with ui.row().classes("items-center"):
+                            ui.button("Выбрать историю", on_click=lambda key=record.run_id: select_run(state, key)).props("flat dense")
+                            ui.switch("Показать в сравнении", value=record.visible,
+                                      on_change=lambda e, key=record.run_id: set_run_visibility(state, key, e.value))
+                        if state.selected_run_id == record.run_id:
+                            ui.label("Выбрана история этого запуска").classes("panel-copy")
+
+        state.refresh_runs = render_saved_runs
+        render_saved_runs()
     build_playback_controls(state)
     with ui.element("section").classes("results-section"):
         ui.label("Графики поколений").classes("panel-heading")
