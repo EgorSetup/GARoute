@@ -1,4 +1,4 @@
-"""Наблюдаемые события сложности P01–P15 без подстановки отсутствующих фактов."""
+"""Наблюдаемые события сложности без подстановки отсутствующих фактов."""
 
 from dataclasses import dataclass
 from math import fsum, isfinite
@@ -12,12 +12,11 @@ from algorithm.models import EdgeId, RoadEdge, Route, RouteContext
 from config import working_penalty_maxima
 
 
-PENALTY_IDS = tuple(f"P{index:02d}" for index in range(1, 16))
+PENALTY_IDS = ("P02", "P03", "P05", "P06", "P08", "P10", "P11", "P12", "P13", "P14")
 PRESENT, ABSENT, UNKNOWN, UNSUPPORTED = "PRESENT", "ABSENT", "UNKNOWN", "UNSUPPORTED"
 _GEOD = Geod(ellps="WGS84")
 _METRES = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:m)?\s*$", re.IGNORECASE)
 _INTEGER = re.compile(r"^\s*([1-9]\d*)\s*$")
-_BUMP_TYPES = frozenset({"bump", "hump", "table", "cushion"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +83,7 @@ class PenaltyBreakdown:
 
 
 def calculate_penalties(events: PenaltyEvents, coefficients: tuple[float, ...]) -> PenaltyBreakdown:
-    """Начислить Q04 VERIFY только за подтверждённые факты P01–P15."""
+    """Начислить сложность только за подтверждённые факты каталога."""
 
     maxima = working_penalty_maxima()
     if len(coefficients) != len(PENALTY_IDS) or any(
@@ -164,10 +163,8 @@ def _lanes(edge: RoadEdge) -> int | None:
     return None
 
 
-def _direction_status(attrs: Mapping[str, object], edge: RoadEdge, category: str) -> str:
-    keys = {"P07": ("traffic_signals:direction", "direction"),
-            "P08": ("stop:direction", "direction"),
-            "P09": ("give_way:direction", "direction")}[category]
+def _direction_status(attrs: Mapping[str, object], edge: RoadEdge, highway: str) -> str:
+    keys = (f"{highway}:direction", "direction")
     raw = next((attrs[key] for key in keys if key in attrs), None)
     if raw == "both":
         return PRESENT
@@ -207,7 +204,7 @@ def _turn_category(incoming: RoadEdge, outgoing: RoadEdge,
     if abs(delta) >= policy.uturn_min_degrees:
         return "P03"
     if abs(delta) >= policy.turn_min_degrees:
-        return "P01" if delta > 0 else "P02"
+        return "" if delta > 0 else "P02"
     return ""
 
 
@@ -281,10 +278,9 @@ def extract_penalty_events(route: Route, context: RouteContext, policy: PenaltyP
         node_attrs = context.graph.nodes[v]
         node_object = f"osm:node:{v}"
         highway = node_attrs.get("highway")
-        category = {"traffic_signals": "P07", "stop": "P08", "give_way": "P09"}.get(highway)
-        if category is not None:
-            status = _direction_status(node_attrs, edge, category)
-            add(category, status, node_object, 1 if status == PRESENT else 0,
+        if highway in ("stop", "give_way"):
+            status = _direction_status(node_attrs, edge, highway)
+            add("P08", status, node_object, 1 if status == PRESENT else 0,
                 f"node.highway={highway}; direction", "направление не подтверждено" if status == UNKNOWN else "")
 
         railway = node_attrs.get("railway")
@@ -294,8 +290,6 @@ def extract_penalty_events(route: Route, context: RouteContext, policy: PenaltyP
             add(rail_category, status, node_object, 1 if status == PRESENT else 0,
                 f"node.railway={railway}", "конфликт с bridge/tunnel/layer" if status == UNKNOWN else "")
 
-        if node_attrs.get("traffic_calming") in _BUMP_TYPES:
-            add("P15", PRESENT, node_object, 1, "node.traffic_calming")
 
         if index:
             previous = roads[index - 1]
@@ -305,24 +299,22 @@ def extract_penalty_events(route: Route, context: RouteContext, policy: PenaltyP
                     and previous.raw_attributes.get("junction") != "roundabout"
                     and attrs.get("junction") != "roundabout"):
                 if not previous.osm_way_ids or not edge.osm_way_ids:
-                    for turn in ("P01", "P02", "P03"):
+                    for turn in ("P02", "P03"):
                         add(turn, UNKNOWN, f"osm:node:{junction}:{turn}", 0,
                             "directed geometry + OSM way", "неизвестно происхождение дороги")
                 elif set(previous.osm_way_ids).isdisjoint(edge.osm_way_ids):
                     turn = _turn_category(previous, edge, policy)
                     if turn is None:
-                        for category_id in ("P01", "P02", "P03"):
+                        for category_id in ("P02", "P03"):
                             add(category_id, UNKNOWN, f"osm:node:{junction}:{category_id}", 0,
                                 "directed geometry", "нет корректной касательной")
                     elif turn:
                         add(turn, PRESENT, f"osm:node:{junction}", 1,
                             "directed geometry + distinct OSM ways")
 
-    add("P04", UNSUPPORTED, None, 0, "road-level graph",
-        "фактическая смена полосы не наблюдается")
     for category in PENALTY_IDS:
         if not any(item.category == category for item in observations):
-            status = ABSENT if category in ("P01", "P02", "P03") else UNKNOWN
+            status = ABSENT if category in ("P02", "P03") else UNKNOWN
             add(category, status, None, 0, "route/OSM coverage",
                 "нет подтверждённого события" if status == ABSENT else "недостаточно данных для отрицания")
     return PenaltyEvents(tuple(observations))

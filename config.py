@@ -45,6 +45,9 @@ class AreaConfig:
 
 
 GAROUTE_AREA = AreaConfig(north=60.025, south=59.995, east=30.415, west=30.355)
+# Утверждённая область находится внутри Санкт-Петербурга; правило 10.2 ПДД
+# применимо только к явно распознанным обычным городским дорогам этой области.
+GAROUTE_URBAN_CONTEXT = True
 OVERPASS_URL = "https://maps.mail.ru/osm/tools/overpass/api"
 
 # Q02-C RESOLVED / VERIFY: рабочая таблица до сквозной проверки модели.
@@ -73,26 +76,21 @@ class PenaltyDefinition:
 
 
 _PENALTY_CATALOG = (
-    PenaltyDefinition("P01", "Правый поворот", "Касательные разных OSM way на перекрёстке; Q04 VERIFY.", None, 2, 10),
     PenaltyDefinition("P02", "Левый поворот", "Касательные разных OSM way на перекрёстке; Q04 VERIFY.", None, 5, 15),
     PenaltyDefinition("P03", "Разворот", "Поворот ≥150° на перекрёстке; Q04 VERIFY.", None, 12, 30),
-    PenaltyDefinition("P04", "Смена полосы", "Фактическая смена полосы не наблюдается в графе дорог.", False, 10, 20),
     PenaltyDefinition("P05", "Нерегулируемый перекрёсток", "Отсутствие светофора не доказывает нерегулируемость; UNKNOWN.", None, 3, 15),
     PenaltyDefinition("P06", "Кольцевой перекрёсток", "Один непрерывный проезд junction=roundabout; Q04 VERIFY.", None, 4, 15),
-    PenaltyDefinition("P07", "Светофор", "Узел highway=traffic_signals с подтверждённым направлением.", None, 3, 15),
-    PenaltyDefinition("P08", "STOP", "Узел highway=stop с подтверждённым направлением.", None, 5, 20),
-    PenaltyDefinition("P09", "«Уступи дорогу»", "Узел highway=give_way с подтверждённым направлением.", None, 3, 15),
+    PenaltyDefinition("P08", "Приоритет на перекрёстке", "STOP или «Уступи дорогу» с подтверждённым направлением; прежний коэффициент STOP.", None, 5, 20),
     PenaltyDefinition("P10", "Пересечение трамвайных путей", "Узел tram_level_crossing без конфликта уровня; VERIFY.", None, 5, 20),
     PenaltyDefinition("P11", "Железнодорожный переезд", "Узел railway=level_crossing без конфликта уровня.", None, 8, 25),
     PenaltyDefinition("P12", "Многополосный участок", "≥3 полос в направлении движения; за 100 м.", None, 0.5, 5),
     PenaltyDefinition("P13", "Узкая жилая улица", "Жилая дорога с шириной <3,5 м; за 100 м.", None, 2, 10),
     PenaltyDefinition("P14", "Школьная зона", "Один непрерывный участок hazard=school_zone.", None, 5, 20),
-    PenaltyDefinition("P15", "Искусственная неровность", "Узел traffic_calming=bump/hump/table/cushion.", None, 2, 10),
 )
 
 
 def penalty_catalog() -> tuple[PenaltyDefinition, ...]:
-    """Вернуть состав P01–P15 и рабочие числовые пределы Q04 VERIFY."""
+    """Вернуть актуальный состав штрафов и рабочие числовые пределы."""
 
     return _PENALTY_CATALOG
 
@@ -166,8 +164,6 @@ def _check_ga(config: GAConfig, errors: list[str], unresolved: list[str]) -> Non
             errors.append(f"{name} должен быть положительным конечным числом")
     if config.mutation_method not in ("A", "B"):
         errors.append("mutation_method должен быть A или B")
-    if config.seed is not None and type(config.seed) is not int:
-        errors.append("seed должен быть целым числом или пустым")
 
     if config.random_weight_strength is None:
         unresolved.append("Q06-C: сила случайных поисковых весов не согласована")
@@ -202,11 +198,11 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
         errors.append("weights: готовый пресет имеет фиксированные веса")
 
     if config.penalties is None:
-        unresolved.append("Штрафы P01–P15 не заданы")
-    elif len(config.penalties) != 15 or any(
+        unresolved.append("Штрафы сложности не заданы")
+    elif len(config.penalties) != len(_PENALTY_CATALOG) or any(
         not _finite_number(value) or value < 0 for value in config.penalties
     ):
-        errors.append("penalties: нужны 15 неотрицательных конечных значений")
+        errors.append("penalties: число значений не соответствует каталогу")
     elif any(value > maximum for value, maximum in zip(config.penalties, working_penalty_maxima())):
         errors.append("penalties: значение превышает рабочий предел Q04 VERIFY")
 
@@ -230,17 +226,6 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
         if config.preset == "easy" and value is None:
             unresolved.append(f"Q05-C: {name} не согласован")
 
-    if type(config.modeled_speeds_enabled) is not bool:
-        errors.append("Режим модельных скоростей должен быть логическим")
-    entries = config.modeled_speeds_kph
-    if not isinstance(entries, tuple) or any(
-        not isinstance(item, tuple) or len(item) != 2 or
-        type(item[0]) is not str or not item[0] or
-        not _positive_number(item[1]) for item in entries
-    ):
-        errors.append("Модельные скорости: нужны классы и положительные значения км/ч")
-    elif len({name for name, _ in entries}) != len(entries):
-        errors.append("Модельные скорости: класс указан повторно")
 
 
 def validate_config(config: AppConfig) -> ValidationReport:

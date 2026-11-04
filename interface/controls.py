@@ -1,7 +1,6 @@
 """Состояние интерфейса, которое позже свяжет виджеты с расчётом."""
 
 from dataclasses import dataclass, field, replace
-from collections import Counter
 from math import isfinite
 from typing import Callable
 
@@ -29,6 +28,7 @@ class UIState:
 
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
+    graph_loading: bool = False
     graph_version: int = 0
     road_data: RoadData | None = None
     normalized_roads: NormalizedRoadData | None = None
@@ -49,10 +49,8 @@ class UIState:
     endpoint_b: object | None = None
     initial_population: object | None = None
     base_population: object | None = None
-    base_seed_used: int | None = None
     base_scales: NormalizationScales | None = None
     initial_population_running: bool = False
-    initial_seed_used: int | None = None
     initial_population_preset: str | None = None
     initial_complexities: tuple[PenaltyBreakdown, ...] = ()
     initial_previews: tuple["RoutePreview", ...] = ()
@@ -63,10 +61,13 @@ class UIState:
     refresh_population_results: Callable[[], None] | None = None
     refresh_normalization: Callable[[], None] | None = None
     refresh_easy: Callable[[], None] | None = None
-    refresh_modeled_speeds: Callable[[], None] | None = None
     clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
+    refresh_map_controls: Callable[[], None] | None = None
+    create_p0: Callable[[], object] | None = None
+    load_roads: Callable[[], object] | None = None
+    graph_load_failed: bool = False
     demo_mode: bool = False
     demo_point_a: tuple[float, float] | None = None
     demo_point_b: tuple[float, float] | None = None
@@ -120,7 +121,6 @@ SubmitChange = Callable[[PendingChange, Callable[[], None], Callable[[], None]],
 INTEGER_FIELDS = {
     "population_size", "elite_count", "max_generations", "max_copies",
     "attempts_per_slot", "tournament_size", "min_waypoints", "max_waypoints",
-    "seed",
     "stagnation_window",
 }
 FLOAT_FIELDS = {"initial_length_factor", "segment_length_m", "random_weight_strength"}
@@ -157,8 +157,6 @@ def propose_setting_change(state: UIState, key: str, value: object) -> PendingCh
         parsed = value
     elif key == "mutation_method":
         parsed = value
-    elif key == "seed" and value in (None, ""):
-        parsed = None
     elif key in INTEGER_FIELDS | FLOAT_FIELDS | PERCENT_FIELDS.keys():
         number = _numeric_input(value)
         if number is None:
@@ -199,8 +197,6 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
         state.routing_graph = graph
         if state.refresh_traffic is not None:
             state.refresh_traffic()
-        if state.refresh_modeled_speeds is not None:
-            state.refresh_modeled_speeds()
         return True
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
@@ -356,9 +352,7 @@ def confirm_change(state: UIState) -> UIState:
         state.refresh_charts()
     state.initial_population = None
     state.base_population = None
-    state.base_seed_used = None
     state.base_scales = None
-    state.initial_seed_used = None
     state.initial_population_preset = None
     state.initial_complexities = ()
     state.initial_previews = ()
@@ -432,23 +426,6 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
         if number is None or not 0 <= number <= EASY_DELTA_MAX * 100:
             return PendingChange(key, value, None, ("Превышение должно быть в диапазоне 0–200%",))
         updated = replace(fitness, **{key: number / 100})
-    elif key == "modeled_speeds_enabled":
-        if type(value) is not bool:
-            return PendingChange(key, value, None, ("Выберите режим модельных скоростей",))
-        updated = replace(fitness, modeled_speeds_enabled=value)
-    elif key == "modeled_speed":
-        if not isinstance(value, tuple) or len(value) != 2 or type(value[0]) is not str or not value[0]:
-            return PendingChange(key, value, None, ("Укажите класс дороги и скорость",))
-        road_class, raw_speed = value
-        speed = None if raw_speed in (None, "") else _numeric_input(raw_speed)
-        if raw_speed not in (None, "") and (speed is None or speed <= 0):
-            return PendingChange(key, value, None, ("Скорость должна быть положительным числом км/ч",))
-        values = dict(fitness.modeled_speeds_kph)
-        if speed is None:
-            values.pop(road_class, None)
-        else:
-            values[road_class] = speed
-        updated = replace(fitness, modeled_speeds_kph=tuple(sorted(values.items())))
     else:
         return PendingChange(key, value, None, ("Неизвестная настройка Fitness",))
 
@@ -489,7 +466,7 @@ def propose_penalty_reset(state: UIState) -> PendingChange:
 def build_penalty_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать рабочие коэффициенты, ограничения и подтверждаемое изменение."""
 
-    with ui.expansion("Штрафы сложности · P01–P15", value=False).classes("w-full"):
+    with ui.expansion("Штрафы сложности", value=False).classes("w-full"):
         ui.label("Неизвестные признаки показаны отдельно.").classes("panel-copy")
         values = state.config.fitness.penalties
         error_label = ui.label("").classes("setting-error")
@@ -704,72 +681,6 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
         render_references()
 
 
-def build_modeled_speed_controls(state: UIState, submit: SubmitChange) -> None:
-    """Показывать только недостающие классы OSM без числовых подстановок."""
-
-    with ui.expansion("Учебная модель скоростей", value=False).classes("w-full"):
-        ui.label(
-            "Строгий режим блокирует расчёт без maxspeed. Учебный режим использует только "
-            "введённые вами км/ч; это допущение, а не скорость из OSM."
-        ).classes("panel-copy")
-        error_label = ui.label("").classes("setting-error")
-        fields = ui.column().classes("w-full")
-
-        def set_mode(value: object) -> None:
-            pending = propose_fitness_change(state, "modeled_speeds_enabled", value)
-            error_label.set_text("; ".join(pending.errors))
-            if not pending.errors:
-                old = state.config.fitness.modeled_speeds_enabled
-                submit(pending, lambda: mode_switch.set_value(old), render)
-
-        mode_switch = ui.switch(
-            "Использовать ручные скорости для дорог без maxspeed",
-            value=state.config.fitness.modeled_speeds_enabled,
-            on_change=lambda event: set_mode(event.value),
-        )
-
-        def change_speed(name: str, value: object, previous: float | None) -> None:
-            pending = propose_fitness_change(state, "modeled_speed", (name, value))
-            error_label.set_text("; ".join(pending.errors))
-            if not pending.errors:
-                submit(pending, lambda: widgets[name].set_value(previous), render)
-
-        def render() -> None:
-            fields.clear()
-            roads = state.normalized_roads
-            with fields:
-                if roads is None:
-                    ui.label("Сначала загрузите дорожный граф.").classes("panel-copy")
-                    return
-                graph = state.routing_graph
-                unknown = [roads.edges[edge_id] for edge_id in roads.unknown_speed_edges
-                           if graph is not None and graph.has_edge(*edge_id)
-                           and graph[edge_id[0]][edge_id[1]][edge_id[2]].get("car_access") is True
-                           and state.traffic_levels.get(edge_id, 1) != 11]
-                classes = Counter(
-                    edge.raw_attributes["highway"] for edge in unknown
-                    if edge.raw_speed is None and type(edge.raw_attributes.get("highway")) is str
-                )
-                ambiguous = len(unknown) - sum(classes.values())
-                ui.label(f"Доступных рёбер без исходной скорости: {len(unknown)}. "
-                         "Введите скорость для каждого класса, чтобы открыть расчёт.").classes("panel-copy")
-                if ambiguous:
-                    ui.label(f"Неоднозначных тегов или классов: {ambiguous}; модель их не заменяет.").classes(
-                        "setting-error"
-                    )
-                configured = dict(state.config.fitness.modeled_speeds_kph)
-                for road_class, count in sorted(classes.items()):
-                    widgets[road_class] = ui.number(
-                        f"{road_class} · рёбер: {count}, км/ч", value=configured.get(road_class),
-                        step=1, on_change=lambda event, name=road_class, old=configured.get(road_class):
-                        change_speed(name, event.value, old),
-                    ).props("outlined dense").classes("setting-field")
-
-        widgets: dict[str, Number] = {}
-        state.refresh_modeled_speeds = render
-        render()
-
-
 def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
     """Построить поля ГА; виджеты лишь предлагают изменения состояния."""
 
@@ -820,7 +731,6 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
         add_number("max_copies", "Максимум копий особи", ga.max_copies, minimum=1)
         add_number("attempts_per_slot", "Попытки на свободное место",
                    ga.attempts_per_slot, minimum=1)
-        add_number("seed", "Seed (можно оставить пустым)", ga.seed)
 
     with ui.expansion("Операторы и ограничения", value=False).classes("w-full"):
         mutation_select = ui.select({"A": "A — заменить участок", "B": "B — через промежуточную точку"},

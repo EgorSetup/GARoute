@@ -21,8 +21,6 @@ def prepared_state(context: RouteContext) -> UIState:
     state.normalized_roads = NormalizedRoadData(context.graph, source.roads, {}, (), (), {})
     state.base_population = PopulationResult(source.initial_population, 4, 4, ())
     state.initial_population = state.base_population
-    state.base_seed_used = 7
-    state.initial_seed_used = 7
     state.base_scales = NormalizationScales(1, 3.5, 1)
     return state
 
@@ -70,14 +68,14 @@ def test_failed_generation_explains_attempts(route_context: RouteContext) -> Non
     assert outcome.status == "failed" and outcome.failed_generation is not None
     detail = generation_failure_detail(outcome)
     assert detail is not None and "Попыток:" in detail and "принято" in detail
-    assert "причины отказов:" in detail and "seed" in detail
+    assert "причины отказов:" in detail and "параметры ГА" in detail
 
 
 def test_run_metadata(route_context: RouteContext) -> None:
     state = prepared_state(route_context)
     run_id = completed(state)
     record = state.saved_runs[0]
-    assert (record.run_id, record.start, record.end, record.seed_used) == (run_id, 1, 6, 7)
+    assert (record.run_id, record.start, record.end) == (run_id, 1, 6)
     assert record.outcome.best is not None and record.outcome.best.metrics is not None
     assert record.outcome.stop_reason == "generation_limit"
     assert record.uncertain_penalties >= 0

@@ -84,3 +84,28 @@ def test_osm_way_mapping() -> None:
     assert data.edges[2, 1, 0].speed_kph == 45
     assert data.edges[2, 1, 0].speed_source == "maxspeed:backward"
     assert graph[2][1][0]["maxspeed"] == "RU:urban"
+
+
+@pytest.mark.parametrize("highway,raw_speed,expected,status", [
+    ("residential", "30", 30, "observed"),
+    ("residential", "RU:urban", 60, "implicit_osm_verify"),
+    ("living_street", "RU:living_street", 20, "implicit_osm_verify"),
+    ("living_street", None, 20, "assumed_rule"),
+    ("unclassified", None, 60, "assumed_rule"),
+    ("secondary_link", None, 60, "assumed_rule"),
+    ("service", None, None, "unknown"),
+    ("residential", "30;50", None, "unknown"),
+])
+def test_urban_speed_policy(highway, raw_speed, expected, status) -> None:
+    graph = graph_with_parallel_edges()
+    attrs = graph[1][2][0]
+    attrs["highway"] = highway
+    attrs.pop("maxspeed")
+    if raw_speed is not None:
+        attrs["maxspeed"] = raw_speed
+    edge = build_road_data(raw_data(graph), urban_context=True).edges[1, 2, 0]
+    assert edge.speed_kph == expected
+    assert edge.speed_status == status
+    if status == "assumed_rule":
+        assert edge.speed_source == "PDD_10.2+OSM_highway"
+    assert graph[1][2][0].get("maxspeed") == raw_speed

@@ -103,8 +103,6 @@ class TimeModel:
     roads: Mapping[EdgeId, RoadEdge]
     levels: Mapping[EdgeId, int] = field(default_factory=dict)
     factors: Mapping[int, float] = field(default_factory=lambda: TRAFFIC_SPEED_FACTORS.copy())
-    modeled_speeds_enabled: bool = False
-    modeled_speeds_kph: Mapping[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,20 +114,12 @@ class ResolvedSpeed:
 
 
 def resolve_speed(edge: RoadEdge, model: TimeModel) -> ResolvedSpeed | None:
-    """Модель действует лишь для отсутствующего тега и явно заданного класса."""
+    """Вернуть нормализованную скорость OSM или расчётного правила области."""
 
     speed = edge.speed_kph
     if type(speed) in (int, float) and isfinite(speed) and speed > 0:
-        return ResolvedSpeed(float(speed), edge.speed_status)
-    if not model.modeled_speeds_enabled or edge.raw_speed is not None:
-        return None
-    road_class = edge.raw_attributes.get("highway")
-    if type(road_class) is not str:
-        return None
-    speed = model.modeled_speeds_kph.get(road_class)
-    if type(speed) not in (int, float) or not isfinite(speed) or speed <= 0:
-        return None
-    return ResolvedSpeed(float(speed), f"manual_model:{road_class}")
+        return ResolvedSpeed(float(speed), edge.speed_source or edge.speed_status)
+    return None
 
 
 def _valid_edges(route: Route, context: RouteContext, model: TimeModel):

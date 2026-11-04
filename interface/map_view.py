@@ -11,12 +11,11 @@ import networkx as nx
 from pyproj import Geod
 
 from nicegui import ui
-from nicegui.elements.input import Input
 from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
 from algorithm.genetic.initialization import (
-    PopulationResult, choose_seed, generate_initial_population, production_weight_strategy,
+    PopulationResult, generate_initial_population, production_weight_strategy,
 )
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.evaluation.fitness import (
@@ -24,7 +23,7 @@ from algorithm.evaluation.fitness import (
 )
 from algorithm.evaluation.normalization import compute_scales
 from algorithm.models import Route, RouteContext, RouteMetrics
-from config import GAROUTE_AREA
+from config import GAROUTE_AREA, GAROUTE_URBAN_CONTEXT
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
 from data.road_graph import NormalizedRoadData, build_road_data
@@ -51,6 +50,8 @@ def set_map_mode(state: UIState, mode: str) -> bool:
     if mode not in MAP_MODES:
         return False
     state.map_mode = mode
+    if state.refresh_map_controls is not None:
+        state.refresh_map_controls()
     return True
 
 
@@ -118,7 +119,7 @@ def _prepare_roads(segment_length: float):
 
     raw = load_road_network(GAROUTE_AREA)
     try:
-        normalized = build_road_data(raw)
+        normalized = build_road_data(raw, urban_context=GAROUTE_URBAN_CONTEXT)
         graph, access_report = apply_access_to_graph(normalized)
         turn_rules = build_forbidden_turns(normalized.raw_relations, normalized)
         segments = build_visual_segments(normalized, segment_length)
@@ -197,7 +198,7 @@ def render_frame(map_element: Leaflet, frame: Frame, roads: NormalizedRoadData,
     return existing_layers
 
 
-def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = None) -> MapHandle:
+def create_map(state: UIState, *, status_label: Label, population_label: Label) -> MapHandle:
     """Показать область, реальные дороги и привязанные к графу точки A/B."""
 
     with ui.element("div").classes("map-stage"):
@@ -258,7 +259,6 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 map_element.remove_layer(layer)
             population_layers.clear()
             state.initial_population = None
-            state.initial_seed_used = None
             state.initial_population_preset = None
             state.initial_complexities = ()
             state.initial_previews = ()
@@ -353,10 +353,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 markers[endpoint] = map_element.marker(latlng=(lat, lon), options={"title": endpoint})
             else:
                 marker.move(lat, lon)
-            if endpoint_inputs is not None:
-                (endpoint_inputs[0] if endpoint == "A" else endpoint_inputs[1]).set_value(str(node))
-            if state.endpoint_a is not None and state.endpoint_b is not None:
-                p0_button.enable()
+            if state.refresh_map_controls is not None:
+                state.refresh_map_controls()
 
         if not state.demo_mode:
             with ui.dialog().props("persistent") as endpoint_dialog, ui.card():
@@ -374,237 +372,223 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     if key in ("endpoint_a", "endpoint_b"):
                         refresh_marker("A" if key == "endpoint_a" else "B")
                         show_pair_status()
+                        set_map_mode(state, "view")
 
                 with ui.row():
                     ui.button("Отмена", on_click=cancel_endpoint).props("flat")
                     ui.button("Изменить и удалить", on_click=confirm_endpoint).props("color=negative")
-        with ui.element("div").classes("map-message"):
-            status = "ДЕМО: проверка событий, не дорожный граф" if state.demo_mode else (
-                "Граф готов" if state.graph_loaded else "Граф ещё не загружен"
-            )
-            status_label = ui.label(status).classes("map-message-title")
-            if state.demo_mode:
-                ui.label("Красная линия — тестовый сегмент; данные не участвуют в расчёте.").classes(
-                    "map-message-copy"
-                )
-            elif not state.graph_loaded:
-                hint_label = ui.label("Дорожная сеть появится после загрузки области.").classes(
-                    "map-message-copy"
-                )
-                async def load_area() -> None:
-                    if state.active_run_id is not None:
-                        return
-                    button.disable()
-                    status_label.set_text("Загружаю автомобильную сеть OSM…")
-                    try:
-                        (road_data, normalized, graph, access_report, turn_rules,
-                         segments, levels) = await asyncio.to_thread(
-                            _prepare_roads, state.config.ga.segment_length_m,
-                        )
-                    except OSMLoadError as error:
-                        show_load_error(MapHandle(map_element, status_label), error)
-                        button.enable()
-                        return
-                    state.road_data = road_data
-                    state.normalized_roads = normalized
-                    state.routing_graph = graph
-                    state.turn_rules = turn_rules
-                    state.traffic_segments = segments
-                    state.traffic_levels = levels
-                    state.graph_version += 1
-                    state.graph_loaded = True
-                    if state.refresh_modeled_speeds is not None:
-                        state.refresh_modeled_speeds()
-                    for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
-                        layer = _road_geojson(normalized, graph, accessible)
-                        if layer["features"]:
-                            map_element.generic_layer(name="geoJSON", args=[layer, {
-                                "style": {"color": color, "weight": 3 if accessible else 4,
-                                          "opacity": 0.85, "interactive": False},
-                            }])
-                    for visual in segments.segments:
-                        layer = map_element.generic_layer(name="polyline", args=[
-                            [[lat, lon] for lon, lat in visual.geometry_lonlat],
-                            {"color": TRAFFIC_COLORS[0], "weight": 7, "opacity": 0.8,
-                             "bubblingMouseEvents": False},
-                        ])
-                        segment_layers[visual.segment_id] = layer
-                        rendered_levels[visual.segment_id] = 1
-                        for event, action in (("click", "increase"), ("contextmenu", "decrease")):
-                            callback = (
-                                "function(e) { L.DomEvent.stop(e.originalEvent); "
-                                "emitEvent('garoute-traffic-segment', {segment_id:"
-                                f"{json.dumps(visual.segment_id)}, action:'{action}'}}); }}"
-                            )
-                            layer.run_method(":on", f"'{event}'", callback)
-                    status_label.set_text(
-                        f"Граф загружен: {road_data.metadata['nodes']} узлов, "
-                        f"{road_data.metadata['edges']} рёбер. Выберите A и B. "
-                        f"Неподдержанных отношений: {len(turn_rules.issues)}."
+        if state.demo_mode:
+            status_label.set_text("ДЕМО: тестовая карта")
+        elif not state.graph_loaded:
+            async def load_area() -> None:
+                if state.active_run_id is not None or state.graph_loaded or state.graph_loading:
+                    return
+                state.graph_loading = True
+                state.graph_load_failed = False
+                status_label.set_text("Загрузка дорог…")
+                if state.refresh_map_controls is not None:
+                    state.refresh_map_controls()
+                try:
+                    (road_data, normalized, graph, access_report, turn_rules,
+                     segments, levels) = await asyncio.to_thread(
+                        _prepare_roads, state.config.ga.segment_length_m,
                     )
-                    hint_label.set_text("Выберите A и B слева.")
-                    button.set_visibility(False)
+                except OSMLoadError as error:
+                    show_load_error(MapHandle(map_element, status_label), error)
+                    state.graph_loading = False
+                    state.graph_load_failed = True
+                    if state.refresh_map_controls is not None:
+                        state.refresh_map_controls()
+                    return
+                state.road_data = road_data
+                state.normalized_roads = normalized
+                state.routing_graph = graph
+                state.turn_rules = turn_rules
+                state.traffic_segments = segments
+                state.traffic_levels = levels
+                state.graph_version += 1
+                state.graph_loaded = True
+                state.graph_loading = False
+                state.graph_load_failed = False
+                for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
+                    layer = _road_geojson(normalized, graph, accessible)
+                    if layer["features"]:
+                        map_element.generic_layer(name="geoJSON", args=[layer, {
+                            "style": {"color": color, "weight": 3 if accessible else 4,
+                                      "opacity": 0.85, "interactive": False},
+                        }])
+                for visual in segments.segments:
+                    layer = map_element.generic_layer(name="polyline", args=[
+                        [[lat, lon] for lon, lat in visual.geometry_lonlat],
+                        {"color": TRAFFIC_COLORS[0], "weight": 7, "opacity": 0.8,
+                         "bubblingMouseEvents": True},
+                    ])
+                    segment_layers[visual.segment_id] = layer
+                    rendered_levels[visual.segment_id] = 1
+                    for event, action in (("click", "increase"), ("contextmenu", "decrease")):
+                        callback = (
+                            "function(e) { "
+                            "emitEvent('garoute-traffic-segment', {segment_id:"
+                            f"{json.dumps(visual.segment_id)}, action:'{action}'}}); }}"
+                        )
+                        layer.run_method(":on", f"'{event}'", callback)
+                status_label.set_text("Дороги готовы · выберите A и B")
+                if state.refresh_map_controls is not None:
+                    state.refresh_map_controls()
 
-                button = ui.button("Загрузить дороги", on_click=load_area).props("outline dense")
-                population_label = ui.label("P0 ещё не сформирована").classes("map-message-copy")
+            state.load_roads = load_area
+            ui.timer(0.1, load_area, once=True)
 
-                async def show_initial_population() -> None:
-                    if state.active_run_id is not None or state.initial_population_running:
-                        return
-                    if (state.routing_graph is None or state.normalized_roads is None
-                            or state.endpoint_a is None or state.endpoint_b is None):
-                        return
-                    p0_button.disable()
-                    state.initial_population_running = True
+            async def show_initial_population() -> None:
+                if state.active_run_id is not None or state.initial_population_running:
+                    return
+                if (state.routing_graph is None or state.normalized_roads is None
+                        or state.endpoint_a is None or state.endpoint_b is None):
+                    return
+                state.initial_population_running = True
+                if state.refresh_map_controls is not None:
+                    state.refresh_map_controls()
+                if state.refresh_run is not None:
+                    state.refresh_run()
+
+                def finish() -> None:
+                    state.initial_population_running = False
+                    if state.refresh_map_controls is not None:
+                        state.refresh_map_controls()
                     if state.refresh_run is not None:
                         state.refresh_run()
 
-                    def finish() -> None:
-                        state.initial_population_running = False
-                        p0_button.enable()
-                        if state.refresh_run is not None:
-                            state.refresh_run()
-
-                    population_label.set_text("Формирую P0…")
-                    graph = state.routing_graph
-                    roads = state.normalized_roads
-                    start, end = state.endpoint_a, state.endpoint_b
-                    app_config = state.config
-                    config = app_config.ga
-                    seed_used = state.base_seed_used if state.base_seed_used is not None else choose_seed(config.seed)
-                    context = RouteContext(graph, start, end, state.turn_rules)
-                    time_model = TimeModel(
-                        roads.edges, dict(state.traffic_levels),
-                        modeled_speeds_enabled=app_config.fitness.modeled_speeds_enabled,
-                        modeled_speeds_kph=dict(app_config.fitness.modeled_speeds_kph),
-                    )
-                    base = state.base_population
-                    if not isinstance(base, PopulationResult) or base.error is not None:
-                        try:
-                            base = await asyncio.to_thread(
-                                generate_initial_population, context, config, Random(seed_used),
-                                production_weight_strategy(config.random_weight_strength),
-                            )
-                        except (ValueError, OverflowError) as error:
-                            population_label.set_text(f"Базовая P0 не сформирована: {error}")
-                            finish()
-                            return
-                        if base.error is not None:
-                            population_label.set_text(population_status_text(base))
-                            finish()
-                            return
-                        if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                            finish()
-                            return
-                        state.base_population = base
-                        state.base_seed_used = seed_used
-                    result = base
+                population_label.set_text("Формирую P0…")
+                graph = state.routing_graph
+                roads = state.normalized_roads
+                start, end = state.endpoint_a, state.endpoint_b
+                app_config = state.config
+                config = app_config.ga
+                context = RouteContext(graph, start, end, state.turn_rules)
+                time_model = TimeModel(roads.edges, dict(state.traffic_levels))
+                base = state.base_population
+                if not isinstance(base, PopulationResult) or base.error is not None:
+                    try:
+                        base = await asyncio.to_thread(
+                            generate_initial_population, context, config, Random(),
+                            production_weight_strategy(config.random_weight_strength),
+                        )
+                    except (ValueError, OverflowError) as error:
+                        population_label.set_text(f"Базовая P0 не сформирована: {error}")
+                        finish()
+                        return
+                    if base.error is not None:
+                        population_label.set_text(population_status_text(base))
+                        finish()
+                        return
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
                         finish()
                         return
-                    breakdowns = ()
-                    previews = ()
-                    complexity_error = None
-                    scales = None
-                    scale_error = None
-                    easy_refs = None
-                    easy_error = None
-                    if result.error is None and app_config.fitness.penalties is not None:
-                        def evaluate_p0():
-                            policy = PenaltyPolicy(roads.edges)
-                            evaluated = tuple(calculate_penalties(
+                    state.base_population = base
+                result = base
+                if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
+                    finish()
+                    return
+                breakdowns = ()
+                previews = ()
+                complexity_error = None
+                scales = None
+                scale_error = None
+                easy_refs = None
+                easy_error = None
+                if result.error is None and app_config.fitness.penalties is not None:
+                    def evaluate_p0():
+                        policy = PenaltyPolicy(roads.edges)
+                        evaluated = tuple(calculate_penalties(
+                            extract_penalty_events(route, context, policy),
+                            app_config.fitness.penalties,
+                        ) for route in result.population)
+                        try:
+                            references = compute_easy_references(context, time_model)
+                            reference_error = None
+                        except (ValueError, KeyError, OverflowError) as error:
+                            references = None
+                            reference_error = f"L_min/T_min недоступны: {error}"
+                        route_previews = []
+                        for route in result.population:
+                            try:
+                                length = calculate_length(route, context, time_model)
+                            except (ValueError, KeyError, OverflowError) as error:
+                                route_previews.append(RoutePreview(None, None, str(error)))
+                                continue
+                            try:
+                                time = calculate_travel_time(route, context, time_model)
+                                route_previews.append(RoutePreview(length, time))
+                            except (ValueError, KeyError, OverflowError) as error:
+                                route_previews.append(RoutePreview(length, None, str(error)))
+                        previews_snapshot = tuple(route_previews)
+                        if any(item.time_s is None for item in previews_snapshot):
+                            first_error = next(item.error for item in previews_snapshot if item.time_s is None)
+                            return (evaluated, previews_snapshot, None,
+                                    f"Автоэталоны не вычислены: {first_error}",
+                                    references, reference_error)
+                        metrics = tuple(RouteMetrics(item.length_m, item.time_s, breakdown.total)
+                                        for item, breakdown in zip(previews_snapshot, evaluated))
+                        try:
+                            scales_snapshot = compute_scales(metrics)
+                            return evaluated, previews_snapshot, scales_snapshot, None, references, reference_error
+                        except (ValueError, OverflowError) as error:
+                            return (evaluated, previews_snapshot, None,
+                                    f"Автоэталоны не вычислены: {error}",
+                                    references, reference_error)
+                    try:
+                        breakdowns, previews, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
+                    except (ValueError, KeyError, OverflowError) as error:
+                        complexity_error = str(error)
+                base_scales = state.base_scales
+                if base_scales is None and result is base:
+                    base_scales = scales
+                elif base_scales is None and app_config.fitness.penalties is not None:
+                    def evaluate_base_scales():
+                        policy = PenaltyPolicy(roads.edges)
+                        metrics = tuple(RouteMetrics(
+                            calculate_length(route, context, time_model),
+                            calculate_travel_time(route, context, time_model),
+                            calculate_complexity(calculate_penalties(
                                 extract_penalty_events(route, context, policy),
                                 app_config.fitness.penalties,
-                            ) for route in result.population)
-                            try:
-                                references = compute_easy_references(context, time_model)
-                                reference_error = None
-                            except (ValueError, KeyError, OverflowError) as error:
-                                references = None
-                                reference_error = f"L_min/T_min недоступны: {error}"
-                            route_previews = []
-                            for route in result.population:
-                                try:
-                                    length = calculate_length(route, context, time_model)
-                                except (ValueError, KeyError, OverflowError) as error:
-                                    route_previews.append(RoutePreview(None, None, str(error)))
-                                    continue
-                                try:
-                                    time = calculate_travel_time(route, context, time_model)
-                                    route_previews.append(RoutePreview(length, time))
-                                except (ValueError, KeyError, OverflowError) as error:
-                                    route_previews.append(RoutePreview(length, None, str(error)))
-                            previews_snapshot = tuple(route_previews)
-                            if any(item.time_s is None for item in previews_snapshot):
-                                first_error = next(item.error for item in previews_snapshot if item.time_s is None)
-                                return (evaluated, previews_snapshot, None,
-                                        f"Автоэталоны не вычислены: {first_error}",
-                                        references, reference_error)
-                            metrics = tuple(RouteMetrics(item.length_m, item.time_s, breakdown.total)
-                                            for item, breakdown in zip(previews_snapshot, evaluated))
-                            try:
-                                scales_snapshot = compute_scales(metrics)
-                                return evaluated, previews_snapshot, scales_snapshot, None, references, reference_error
-                            except (ValueError, OverflowError) as error:
-                                return (evaluated, previews_snapshot, None,
-                                        f"Автоэталоны не вычислены: {error}",
-                                        references, reference_error)
-                        try:
-                            breakdowns, previews, scales, scale_error, easy_refs, easy_error = await asyncio.to_thread(evaluate_p0)
-                        except (ValueError, KeyError, OverflowError) as error:
-                            complexity_error = str(error)
-                    base_scales = state.base_scales
-                    if base_scales is None and result is base:
-                        base_scales = scales
-                    elif base_scales is None and app_config.fitness.penalties is not None:
-                        def evaluate_base_scales():
-                            policy = PenaltyPolicy(roads.edges)
-                            metrics = tuple(RouteMetrics(
-                                calculate_length(route, context, time_model),
-                                calculate_travel_time(route, context, time_model),
-                                calculate_complexity(calculate_penalties(
-                                    extract_penalty_events(route, context, policy),
-                                    app_config.fitness.penalties,
-                                )),
-                            ) for route in base.population)
-                            return compute_scales(metrics)
-                        try:
-                            base_scales = await asyncio.to_thread(evaluate_base_scales)
-                        except (ValueError, KeyError, OverflowError):
-                            pass
-                    if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                        finish()
-                        return
-                    clear_population()
-                    state.initial_population = result
-                    state.base_scales = base_scales
-                    state.initial_seed_used = seed_used
-                    state.initial_population_preset = None
-                    state.initial_complexities = breakdowns
-                    state.initial_previews = previews
-                    state.initial_scales = base_scales
-                    state.initial_scale_error = scale_error
-                    state.easy_references = easy_refs
-                    state.easy_reference_error = easy_error
-                    if result.error is None:
-                        population_layers.extend(render_population(map_element, result.population, roads))
-                    status = population_status_text(result)
-                    status += f" Seed: {seed_used}."
-                    if complexity_error is not None:
-                        status += f" C не вычислена: {complexity_error}."
-                    population_label.set_text(status)
-                    if state.refresh_population_results is not None:
-                        state.refresh_population_results()
-                    if state.refresh_normalization is not None:
-                        state.refresh_normalization()
-                    if state.refresh_easy is not None:
-                        state.refresh_easy()
-                    if state.refresh_run is not None:
-                        state.refresh_run()
+                            )),
+                        ) for route in base.population)
+                        return compute_scales(metrics)
+                    try:
+                        base_scales = await asyncio.to_thread(evaluate_base_scales)
+                    except (ValueError, KeyError, OverflowError):
+                        pass
+                if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
                     finish()
+                    return
+                clear_population()
+                state.initial_population = result
+                state.base_scales = base_scales
+                state.initial_population_preset = None
+                state.initial_complexities = breakdowns
+                state.initial_previews = previews
+                state.initial_scales = base_scales
+                state.initial_scale_error = scale_error
+                state.easy_references = easy_refs
+                state.easy_reference_error = easy_error
+                if result.error is None:
+                    population_layers.extend(render_population(map_element, result.population, roads))
+                status = population_status_text(result)
+                if complexity_error is not None:
+                    status += f" C не вычислена: {complexity_error}."
+                population_label.set_text(status)
+                if state.refresh_population_results is not None:
+                    state.refresh_population_results()
+                if state.refresh_normalization is not None:
+                    state.refresh_normalization()
+                if state.refresh_easy is not None:
+                    state.refresh_easy()
+                if state.refresh_run is not None:
+                    state.refresh_run()
+                finish()
 
-                p0_button = ui.button("Показать P0", on_click=show_initial_population).props("outline dense")
-                p0_button.disable()
+            state.create_p0 = show_initial_population
 
         if state.demo_mode:
             segment = map_element.generic_layer(
@@ -672,6 +656,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                 else:
                     refresh_marker(endpoint)
                     show_pair_status()
+                    set_map_mode(state, "view")
 
             map_element.on("map-click", on_real_map)
 

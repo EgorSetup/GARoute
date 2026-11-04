@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from collections import Counter
 from math import fsum, isfinite
 from random import Random
-from secrets import randbits
 from typing import Callable, Hashable, Mapping, Sequence
 
 from algorithm.genetic.validation import validate_route
@@ -13,16 +12,6 @@ from data.road_graph import find_connector
 
 
 WeightStrategy = Callable[[EdgeId, Mapping[str, object], Random], float]
-
-
-def choose_seed(configured: int | None) -> int:
-    """Вернуть заданный seed либо создать и сохранить число для точного повтора."""
-
-    if configured is not None:
-        if type(configured) is not int:
-            raise ValueError("seed must be an integer or empty")
-        return configured
-    return randbits(64)
 
 
 def production_weight_strategy(strength: float) -> WeightStrategy:

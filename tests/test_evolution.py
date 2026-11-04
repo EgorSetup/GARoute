@@ -56,7 +56,7 @@ def production_input(context: RouteContext, **ga_changes) -> RunInput:
 
     ga_values = dict(population_size=4, elite_count=1, max_copies=4,
                      attempts_per_slot=20, tournament_size=2, max_generations=3,
-                     crossover_probability=0, mutation_probability=0, seed=7)
+                     crossover_probability=0, mutation_probability=0)
     ga_values.update(ga_changes)
     ga = replace(GAConfig(), **ga_values)
     base = default_config()
@@ -69,7 +69,7 @@ def production_input(context: RouteContext, **ga_changes) -> RunInput:
                                   "test", attributes["length"], "test", (1,), {},
                                   36.0, "observed", "maxspeed", None, "36")
     return RunInput(tuple(person.route for person in known_population(context)),
-                    replace(base, ga=ga, fitness=fitness), context, roads)
+                    replace(base, ga=ga, fitness=fitness), context, roads, rng_seed=7)
 
 
 def test_generation_zero_and_max_transitions(route_context: RouteContext) -> None:

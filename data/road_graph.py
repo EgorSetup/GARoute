@@ -100,7 +100,7 @@ def _selected_speed(attrs: Mapping[str, object]) -> tuple[object | None, str | N
     return None, None
 
 
-def build_road_data(raw: RawRoadData) -> NormalizedRoadData:
+def build_road_data(raw: RawRoadData, *, urban_context: bool = False) -> NormalizedRoadData:
     """Нормализовать все полные EdgeId без изменения исходного графа."""
 
     graph = raw.graph
@@ -128,10 +128,25 @@ def build_road_data(raw: RawRoadData) -> NormalizedRoadData:
         speed_kph = _speed_kph(raw_speed)
         speed_status = "observed" if speed_kph is not None else "unknown"
         speed_rule = "explicit_numeric" if speed_kph is not None else None
-        if raw_speed == "RU:urban":
-            speed_kph = 60.0
+        symbolic = {"RU:urban": 60.0, "RU:living_street": 20.0}
+        if type(raw_speed) is str and raw_speed in symbolic:
+            speed_kph = symbolic[raw_speed]
             speed_status = "implicit_osm_verify"
-            speed_rule = "RU:urban_to_60_kph"
+            speed_rule = f"{raw_speed}_to_{speed_kph:g}_kph"
+        if speed_kph is None and raw_speed is None and urban_context:
+            road_class = attrs.get("highway")
+            if road_class == "living_street" or attrs.get("living_street") == "yes":
+                speed_kph = 20.0
+                speed_rule = "RU_urban_living_street_20"
+            elif type(road_class) is str and road_class in {
+                "residential", "unclassified", "tertiary", "tertiary_link",
+                "secondary", "secondary_link", "primary", "primary_link",
+            }:
+                speed_kph = 60.0
+                speed_rule = "RU_urban_general_60"
+            if speed_kph is not None:
+                speed_status = "assumed_rule"
+                speed_source = "PDD_10.2+OSM_highway"
         if speed_kph is None:
             unknown.append(edge_id)
         edges[edge_id] = RoadEdge(

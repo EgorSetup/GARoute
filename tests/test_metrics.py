@@ -77,20 +77,16 @@ def test_missing_speed_policy(metrics_case):
     assert unknown_required_speeds(context, replace(model, levels={(2, 5, 0): 11})) == ()
 
 
-def test_manual_class_speed_needs_explicit_mode_and_missing_tag(metrics_case):
+def test_normalized_assumed_speed_is_used_without_manual_settings(metrics_case):
     context, route, model = metrics_case
     edge_id = (2, 5, 0)
     roads = dict(model.roads)
-    roads[edge_id] = replace(road(edge_id, 200, None), raw_attributes={"highway": "living_street"})
-    model = replace(model, roads=roads, modeled_speeds_kph={"living_street": 24})
-    assert unknown_required_speeds(context, model) == (edge_id,)
-    enabled = replace(model, modeled_speeds_enabled=True)
-    assert resolve_speed(roads[edge_id], enabled).source == "manual_model:living_street"
-    assert calculate_travel_time(route, context, enabled) == pytest.approx(10 + 30 + 10)
-    assert unknown_required_speeds(context, enabled) == ()
-    ambiguous = replace(roads[edge_id], raw_speed="30;50")
-    assert resolve_speed(ambiguous, enabled) is None
-    assert resolve_speed(replace(roads[edge_id], raw_attributes={"highway": ["living_street"]}), enabled) is None
+    roads[edge_id] = replace(road(edge_id, 200, 20), speed_status="assumed_rule",
+                             speed_source="PDD_10.2+OSM_highway")
+    model = replace(model, roads=roads)
+    assert resolve_speed(roads[edge_id], model).source == "PDD_10.2+OSM_highway"
+    assert calculate_travel_time(route, context, model) == pytest.approx(10 + 36 + 10)
+    assert unknown_required_speeds(context, model) == ()
 
 
 def test_invalid_route_and_nonfinite(metrics_case):

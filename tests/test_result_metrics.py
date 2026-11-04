@@ -13,19 +13,19 @@ from interface.results import render_route_metrics
 
 def test_manual_route_cost_and_display():
     events = PenaltyEvents((
-        PenaltyEvent("P01", PRESENT, "osm:node:1", 2, "turn"),
+        PenaltyEvent("P02", PRESENT, "osm:node:1", 2, "turn"),
         PenaltyEvent("P12", PRESENT, "osm:way:2", 3.5, "lanes+length"),
     ))
     breakdown = calculate_penalties(events, working_penalty_defaults())
     metrics = RouteMetrics(350, 30, breakdown.total)
-    scales = NormalizationScales(30, 350, 5.75)
+    scales = NormalizationScales(30, 350, 11.75)
     cost = evaluate_cost(metrics, resolve_preset("custom", (0.2, 0.3, 0.5)), scales)
-    assert breakdown.total == 5.75
+    assert breakdown.total == 11.75
     assert cost == 1
     lines = render_route_metrics(RoutePreview(350, 30), breakdown, cost, scales)
     assert "L = 350.00 м" in lines
     assert "T = 30.00 с" in lines
-    assert "C_observed = 5.75 балла" in lines
+    assert "C_observed = 11.75 балла" in lines
     assert "J = 1.0000 (безразмерная стоимость; меньше — лучше)" in lines
     assert any("Tref=30.00 с" in line and "Lref=350.00 м" in line for line in lines)
 

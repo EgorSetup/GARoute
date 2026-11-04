@@ -31,7 +31,7 @@ def generation_failure_detail(outcome: RunResult) -> str | None:
         return None
     reasons = ", ".join(f"{name}: {count}" for name, count in step.rejections) or "не указаны"
     return (f"Попыток: {step.attempts}; принято {step.accepted_count}; "
-            f"причины отказов: {reasons}. Попробуйте другой seed или параметры ГА.")
+            f"причины отказов: {reasons}. Попробуйте другие параметры ГА.")
 
 
 def _disabled_playback_button(label: str, icon: str) -> None:
@@ -355,8 +355,6 @@ def build_results_panel(state: UIState) -> None:
                              "no_eligible_route": "нет допустимого маршрута"}.get(
                                  outcome.stop_reason, outcome.stop_reason)
                 ui.label(f"Расчёт завершён · {generation_count} {noun} · {stop_text}").classes("panel-copy")
-                if outcome.seed_used is not None:
-                    ui.label(f"Seed: {outcome.seed_used}").classes("panel-copy")
                 if outcome.best is None:
                     ui.label("Допустимый итоговый маршрут не найден; поколения доступны для просмотра.").classes("setting-error")
             elif isinstance(outcome, RunResult):
@@ -401,19 +399,8 @@ def build_results_panel(state: UIState) -> None:
                                 ui.label(f"L={metrics.length_m:.2f} м · T={metrics.time_s:.2f} с · "
                                          f"C_observed={metrics.complexity:.2f} балла · "
                                          f"J={best.j:.4f} (только внутри пресета)").classes("panel-copy")
-                            ui.label(f"Seed: {record.seed_used}; остановка: {record.outcome.stop_reason}; "
+                            ui.label(f"Остановка: {record.outcome.stop_reason}; "
                                      f"поколений: {len(record.outcome.history)}").classes("panel-copy")
-                            if record.config.fitness.modeled_speeds_enabled:
-                                configured = ", ".join(
-                                    f"{name}={speed:g} км/ч" for name, speed in record.config.fitness.modeled_speeds_kph
-                                )
-                                usage = ", ".join(
-                                    f"{name}: {count} рёбер" for name, count in record.modeled_speed_usage
-                                ) or "0 рёбер"
-                                ui.label(
-                                    f"Учебная модель скорости: {configured}. Применение в лучшем маршруте: {usage}. "
-                                    "У замещаемых рёбер исходный maxspeed отсутствует; T зависит от введённых значений."
-                                ).classes("setting-error")
                             if record.config.fitness.weights is not None:
                                 weights = record.config.fitness.weights
                                 ui.label(f"Веса T/L/C: {weights[0]*100:g}/{weights[1]*100:g}/{weights[2]*100:g}%").classes("panel-copy")

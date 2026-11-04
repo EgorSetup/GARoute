@@ -26,8 +26,8 @@ def test_single_run_frozen_inputs_and_stale_completion_ignored(route_context: Ro
     handle, error = start_run(state)
     assert error is None and handle is not None
     assert start_run(state)[0] is None
-    candidate = PendingChange("seed", 3,
-                              replace(state.config, ga=replace(state.config.ga, seed=3)))
+    candidate = PendingChange("max_generations", 3,
+                              replace(state.config, ga=replace(state.config.ga, max_generations=3)))
     assert request_condition_change(state, candidate).errors
     route_context.graph[1][2][0]["length"] = 99
     assert handle.run_input.routes.graph[1][2][0]["length"] == 1
@@ -60,7 +60,7 @@ def test_preflight_rejects_busy_p0_pending_change_and_unknown_speed(route_contex
     state.initial_population_running = True
     assert "P0" in start_run(state)[1]
     state.initial_population_running = False
-    state.pending_change = PendingChange("seed", 3, state.config)
+    state.pending_change = PendingChange("max_generations", 3, state.config)
     assert "изменение" in start_run(state)[1]
     state.pending_change = None
     edge_id = (1, 2, 0)

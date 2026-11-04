@@ -121,24 +121,25 @@ def test_auto_scales_pending() -> None:
     assert propose_fitness_change(state, "time_reference_s", 600).errors
 
 
-def test_exact_fifteen_penalties() -> None:
+def test_reduced_penalty_catalog() -> None:
     catalog = penalty_catalog()
-    assert tuple(item.id for item in catalog) == tuple(f"P{i:02d}" for i in range(1, 16))
-    assert len({item.name for item in catalog}) == 15
+    assert tuple(item.id for item in catalog) == (
+        "P02", "P03", "P05", "P06", "P08", "P10", "P11", "P12", "P13", "P14")
+    assert len({item.name for item in catalog}) == 10
     assert all(item.evidence_note for item in catalog)
-    assert catalog[3].name == "Смена полосы"
-    assert catalog[3].feature_available is False
+    assert catalog[4].name == "Приоритет на перекрёстке"
+    assert catalog[4].working_points == 5
 
 
 def test_penalty_change_and_reset_use_confirmation() -> None:
     state = UIState()
-    assert state.config.fitness.penalties[0] == 2
-    assert propose_penalty_change(state, 0, 11).errors
+    assert state.config.fitness.penalties[0] == 5
+    assert propose_penalty_change(state, 0, 16).errors
     assert propose_penalty_change(state, 0, float("nan")).errors
     state.initial_population = object()
     pending = propose_penalty_change(state, 0, 4)
     request_condition_change(state, pending)
-    assert state.config.fitness.penalties[0] == 2
+    assert state.config.fitness.penalties[0] == 5
     assert state.pending_change == pending
     cancel_change(state)
     assert state.initial_population is not None
@@ -150,5 +151,5 @@ def test_penalty_change_and_reset_use_confirmation() -> None:
     request_condition_change(state, propose_penalty_reset(state))
     assert state.config.fitness.penalties[0] == 4
     confirm_change(state)
-    assert state.config.fitness.penalties[0] == 2
+    assert state.config.fitness.penalties[0] == 5
     assert state.initial_population is None

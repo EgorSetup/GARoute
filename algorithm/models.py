@@ -148,7 +148,6 @@ class GAConfig:
     max_waypoints: int = 4
     segment_length_m: float = 500.0
     mutation_method: str = "A"
-    seed: int | None = None
     random_weight_strength: float | None = 1.0  # Q06-C VERIFY: 2^U(-s,s)
     stagnation_window: int | None = 10  # Q06-C VERIFY
     stagnation_enabled: bool = False
@@ -160,15 +159,13 @@ class FitnessConfig:
 
     preset: str | None = None
     weights: tuple[float, float, float] | None = None  # T, L, C
-    penalties: tuple[float, ...] | None = None  # P01–P15, рабочие Q04 VERIFY в default_config
+    penalties: tuple[float, ...] | None = None
     normalization_mode: str | None = None
     time_reference_s: float | None = None
     length_reference_m: float | None = None
     complexity_reference: float | None = None
     easy_length_delta: float | None = None  # Q05-C VERIFY, default_config задаёт 0.5
     easy_time_delta: float | None = None  # Q05-C VERIFY
-    modeled_speeds_enabled: bool = False
-    modeled_speeds_kph: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +191,6 @@ class ConditionKey:
     normalization: tuple[str | None, float | None, float | None, float | None]
     easy_limits: tuple[float | None, float | None]
     custom_weights: tuple[float, float, float] | None
-    modeled_speeds: tuple[bool, tuple[tuple[str, float], ...]] = (False, ())
 
 
 @dataclass(frozen=True, slots=True)

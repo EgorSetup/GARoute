@@ -16,7 +16,7 @@ from algorithm.evaluation.penalties import (
     PenaltyPolicy, calculate_complexity, calculate_penalties, extract_penalty_events,
 )
 from algorithm.genetic.crossover import crossover
-from algorithm.genetic.initialization import choose_seed, production_weight_strategy, route_signature
+from algorithm.genetic.initialization import production_weight_strategy, route_signature
 from algorithm.genetic.mutation import MutationPolicy, mutate
 from algorithm.genetic.selection import ranking_key, tournament_select
 from algorithm.genetic.validation import validate_route
@@ -89,6 +89,7 @@ class RunInput:
     roads: Mapping[EdgeId, RoadEdge]
     traffic_levels: Mapping[EdgeId, int] = field(default_factory=dict)
     auto_scales: NormalizationScales | None = None
+    rng_seed: int | None = None  # Только внутренние воспроизводимые проверки.
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +103,6 @@ class RunResult:
     scales: NormalizationScales | None
     error: str | None = None
     failed_generation: GenerationResult | None = None
-    seed_used: int | None = None
 
     @property
     def transitions(self) -> int:
@@ -327,12 +327,9 @@ def should_stop(history: Sequence[GenerationSnapshot], config: GAConfig) -> str 
 def run_evolution(run_input: RunInput) -> RunResult:
     """Оценить P0 и выполнить не более G_max переходов на копии условий."""
 
-    seed_used: int | None = None
-
     def failed(reason: str, detail: str, history=(), best=None, scales=None,
                generation=None) -> RunResult:
-        return RunResult("failed", reason, tuple(history), best, scales, detail, generation,
-                         seed_used)
+        return RunResult("failed", reason, tuple(history), best, scales, detail, generation)
 
     report = validate_config(run_input.config)
     if not report.ready_for_run:
@@ -354,11 +351,7 @@ def run_evolution(run_input: RunInput) -> RunResult:
             edge_id for edge_id, level in levels.items() if level == 11
         )
         routes = replace(run_input.routes, graph=graph, closed_edges=closed)
-        time_model = TimeModel(
-            roads, levels,
-            modeled_speeds_enabled=run_input.config.fitness.modeled_speeds_enabled,
-            modeled_speeds_kph=dict(run_input.config.fitness.modeled_speeds_kph),
-        )
+        time_model = TimeModel(roads, levels)
         penalties = PenaltyPolicy(roads)
         unknown = unknown_required_speeds(routes, time_model)
         if unknown:
@@ -412,8 +405,7 @@ def run_evolution(run_input: RunInput) -> RunResult:
         generation_context = GenerationContext(
             routes, ga, MutationPolicy(production_weight_strategy(ga.random_weight_strength)),
         )
-        seed_used = choose_seed(ga.seed)
-        rng = Random(seed_used)
+        rng = Random(run_input.rng_seed)
         while (stop := should_stop(history, ga)) is None:
             step = build_next_generation(population, generation_context, rng, evaluate)
             if step.error is not None:
@@ -428,7 +420,7 @@ def run_evolution(run_input: RunInput) -> RunResult:
             if candidate.eligible and (best is None or candidate.j < best.j):
                 best = candidate
         return RunResult("completed", stop if best is not None else "no_eligible_route",
-                         tuple(history), best, scales, seed_used=seed_used)
+                         tuple(history), best, scales)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         reason = "generation_failed" if history else "invalid_input"
         return failed(reason, str(error), history, best, scales)

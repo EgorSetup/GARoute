@@ -1,11 +1,11 @@
-"""P01–P15: факты OSM, направления, единицы и неизвестность отдельно от нуля."""
+"""Актуальные штрафы: факты OSM, направления и неопределённость."""
 
 import networkx as nx
 import pytest
 from dataclasses import replace
 
 from algorithm.evaluation.penalties import (
-    ABSENT, PRESENT, UNKNOWN, UNSUPPORTED, PENALTY_IDS,
+    ABSENT, PRESENT, UNKNOWN, PENALTY_IDS,
     PenaltyEvent, PenaltyEvents, PenaltyPolicy, calculate_complexity,
     calculate_penalties, extract_penalty_events,
 )
@@ -42,18 +42,16 @@ def observations(result, category, status=PRESENT):
 
 def test_weighted_sum_breakdown_and_unknown():
     events = PenaltyEvents((
-        PenaltyEvent("P01", PRESENT, "osm:node:1", 2, "turn"),
+        PenaltyEvent("P02", PRESENT, "osm:node:1", 2, "turn"),
         PenaltyEvent("P12", PRESENT, "osm:way:2", 3.5, "lanes+length"),
         PenaltyEvent("P05", UNKNOWN, "osm:node:3", 0, "missing control"),
-        PenaltyEvent("P04", UNSUPPORTED, None, 0, "road-level graph"),
     ))
     breakdown = calculate_penalties(events, working_penalty_defaults())
-    assert breakdown.lines[0].subtotal == 4
-    assert breakdown.lines[11].subtotal == 1.75
-    assert calculate_complexity(breakdown) == 5.75
-    assert len(breakdown.uncertain) == 2
-    assert breakdown.lines[4].subtotal == 0
-    assert breakdown.lines[4].uncertain[0].status == UNKNOWN
+    assert breakdown.lines[0].subtotal == 10
+    assert next(line for line in breakdown.lines if line.category == "P12").subtotal == 1.75
+    assert calculate_complexity(breakdown) == 11.75
+    assert len(breakdown.uncertain) == 1
+    assert next(line for line in breakdown.lines if line.category == "P05").uncertain[0].status == UNKNOWN
 
 
 def test_invalid_penalty_values_and_uncertain_quantity():
@@ -61,21 +59,21 @@ def test_invalid_penalty_values_and_uncertain_quantity():
     with pytest.raises(ValueError):
         calculate_penalties(PenaltyEvents(()), defaults[:-1])
     with pytest.raises(ValueError):
-        calculate_penalties(PenaltyEvents(()), (11, *defaults[1:]))
+        calculate_penalties(PenaltyEvents(()), (16, *defaults[1:]))
     with pytest.raises(ValueError):
         calculate_penalties(PenaltyEvents((
             PenaltyEvent("P05", UNKNOWN, None, 1, "missing"),
         )), defaults)
 
 
-def test_fifteen_categories_and_unknown_lane_change():
+def test_ten_categories_and_unknown_data():
     route, context, policy = fixture_road(
         {1: (30.0, 60.0), 2: (30.01, 60.0)},
         [(1, 2, 0, {"osmid": 11, "reversed": False, "highway": "residential"})],
     )
     result = extract_penalty_events(route, context, policy)
     assert {item.category for item in result.observations} == set(PENALTY_IDS)
-    assert observations(result, "P04", UNSUPPORTED)
+    assert len(PENALTY_IDS) == 10
     assert observations(result, "P05", UNKNOWN)
     assert observations(result, "P12", UNKNOWN)
     assert observations(result, "P13", UNKNOWN)
@@ -83,7 +81,7 @@ def test_fifteen_categories_and_unknown_lane_change():
 
 
 @pytest.mark.parametrize("end,expected", [
-    ((30.0, 59.99), "P01"), ((30.0, 60.01), "P02"), ((29.99, 60.0), "P03"),
+    ((30.0, 59.99), None), ((30.0, 60.01), "P02"), ((29.99, 60.0), "P03"),
 ])
 def test_directional_turns(end, expected):
     route, context, policy = fixture_road(
@@ -93,8 +91,12 @@ def test_directional_turns(end, expected):
         extra_edges=((4, 2, 0, {"osmid": 13}),),
     )
     result = extract_penalty_events(route, context, policy)
-    assert len(observations(result, expected)) == 1
-    assert observations(result, expected)[0].object_id == "osm:node:2"
+    if expected is None:
+        assert not any(item.status == PRESENT and item.category in ("P02", "P03")
+                       for item in result.observations)
+    else:
+        assert len(observations(result, expected)) == 1
+        assert observations(result, expected)[0].object_id == "osm:node:2"
 
 
 def test_same_way_bend_is_not_a_maneuver():
@@ -104,8 +106,8 @@ def test_same_way_bend_is_not_a_maneuver():
         extra_edges=((4, 2, 0, {"osmid": 13}),),
     )
     result = extract_penalty_events(route, context, policy)
-    assert not observations(result, "P01")
-    assert observations(result, "P01", ABSENT)
+    assert not observations(result, "P02")
+    assert observations(result, "P02", ABSENT)
 
 
 def test_no_double_count_and_distance_units():
@@ -126,12 +128,10 @@ def test_no_double_count_and_distance_units():
 
 
 @pytest.mark.parametrize("tag,category", [
-    ({"highway": "traffic_signals", "direction": "forward"}, "P07"),
     ({"highway": "stop", "stop:direction": "forward"}, "P08"),
-    ({"highway": "give_way", "give_way:direction": "forward"}, "P09"),
+    ({"highway": "give_way", "give_way:direction": "forward"}, "P08"),
     ({"railway": "tram_level_crossing"}, "P10"),
     ({"railway": "level_crossing"}, "P11"),
-    ({"traffic_calming": "bump"}, "P15"),
 ])
 def test_confirmed_point_features(tag, category):
     route, context, policy = fixture_road(
@@ -147,12 +147,23 @@ def test_bridge_not_tram_crossing_and_direction_unknown():
     route, context, policy = fixture_road(
         {1: (30.0, 60.0), 2: (30.01, 60.0)},
         [(1, 2, 0, {"osmid": 11, "reversed": False, "bridge": "yes"})],
-        node_tags={2: {"railway": "tram_level_crossing", "highway": "traffic_signals"}},
+        node_tags={2: {"railway": "tram_level_crossing", "highway": "stop"}},
     )
     result = extract_penalty_events(route, context, policy)
     assert not observations(result, "P10")
     assert observations(result, "P10", UNKNOWN)
-    assert observations(result, "P07", UNKNOWN)
+    assert observations(result, "P08", UNKNOWN)
+
+
+def test_removed_events_are_not_charged():
+    route, context, policy = fixture_road(
+        {1: (30.0, 60.0), 2: (30.01, 60.0)},
+        [(1, 2, 0, {"osmid": 11, "reversed": False})],
+        node_tags={2: {"highway": "traffic_signals", "traffic_calming": "bump"}},
+    )
+    result = extract_penalty_events(route, context, policy)
+    assert not set(PENALTY_IDS) & {"P01", "P04", "P07", "P09", "P15"}
+    assert not result.confirmed
 
 
 def test_pedestrian_tram_crossing_not_car_event():
