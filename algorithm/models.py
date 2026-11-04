@@ -76,11 +76,13 @@ class EligibilityReport:
 
 @dataclass(frozen=True, slots=True)
 class Individual:
-    """Маршрут с рассчитанной извне стоимостью J."""
+    """Маршрут с обычной J и отдельной пригодностью для итогового выбора."""
 
     route: Route
     j: float
     metrics: RouteMetrics | None = None
+    eligible: bool = True
+    eligibility_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

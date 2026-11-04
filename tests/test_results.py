@@ -53,6 +53,18 @@ def test_presets_accumulate(route_context: RouteContext) -> None:
     assert state.saved_runs[0].outcome.scales == state.saved_runs[1].outcome.scales == state.base_scales
 
 
+def test_three_presets_share_exact_p0_chromosomes(route_context: RouteContext) -> None:
+    state = prepared_state(route_context)
+    expected = tuple(route.edges for route in state.base_population.population)
+    actual = []
+    for preset in ("fast", "short", "easy"):
+        switch_preset(state, preset)
+        completed(state)
+        actual.append(tuple(person.route.edges for person in state.saved_runs[-1].outcome.history[0].population))
+    assert actual == [expected] * 3
+    assert len(state.saved_runs) == 3
+
+
 def test_failed_generation_explains_attempts(route_context: RouteContext) -> None:
     outcome = run_evolution(production_input(route_context, max_copies=1, attempts_per_slot=1))
     assert outcome.status == "failed" and outcome.failed_generation is not None
@@ -108,7 +120,7 @@ def test_repeated_preset_policy(route_context: RouteContext) -> None:
     )
 
 
-def test_easy_uses_filtered_p0_and_shared_scales(route_context: RouteContext) -> None:
+def test_easy_uses_same_p0_and_shared_scales(route_context: RouteContext) -> None:
     state = prepared_state(route_context)
     base = state.base_population.population
     state.initial_population = PopulationResult((base[0], base[1], base[2], base[0]), 4, 1, ())
@@ -117,5 +129,5 @@ def test_easy_uses_filtered_p0_and_shared_scales(route_context: RouteContext) ->
     completed(state)
     record = state.saved_runs[0]
     assert record.outcome.scales == state.base_scales
-    assert tuple(person.route for person in record.outcome.history[0].population) == state.initial_population.population
+    assert tuple(person.route for person in record.outcome.history[0].population) == base
     assert state.base_population.population == base

@@ -18,7 +18,7 @@ from algorithm.evaluation.penalties import (
 from algorithm.genetic.crossover import crossover
 from algorithm.genetic.initialization import choose_seed, production_weight_strategy, route_signature
 from algorithm.genetic.mutation import MutationPolicy, mutate
-from algorithm.genetic.selection import tournament_select
+from algorithm.genetic.selection import ranking_key, tournament_select
 from algorithm.genetic.validation import validate_route
 from algorithm.models import (
     AppConfig, EasyLimits, EdgeId, EligibilityReport, GAConfig, GenerationEvent,
@@ -152,12 +152,13 @@ def snapshot_generation(
         copied.append(Individual(
             Route(tuple(tuple(edge) for edge in person.route.edges)), person.j,
             RouteMetrics(metrics.length_m, metrics.time_s, metrics.complexity),
+            person.eligible, person.eligibility_reasons,
         ))
     copied_events = tuple(GenerationEvent(
         event.kind, tuple(event.parents), event.child_index, event.changed,
         event.accepted, tuple(event.reasons), event.origin,
     ) for event in events)
-    return GenerationSnapshot(tuple(copied), min(range(len(copied)), key=lambda i: copied[i].j),
+    return GenerationSnapshot(tuple(copied), min(range(len(copied)), key=lambda i: ranking_key(copied[i])),
                               stats, copied_events, generation)
 
 
@@ -200,18 +201,7 @@ def build_next_generation(
         return empty("invalid_current_population")
     if max(Counter(route_signature(individual.route) for individual in current).values()) > config.max_copies:
         return empty("invalid_current_copies")
-    if run_context.eligible is not None:
-        for individual in current:
-            if individual.metrics is None:
-                return empty("ineligible_current_population")
-            try:
-                report = run_context.eligible(individual.metrics)
-            except (ValueError, TypeError, ArithmeticError):
-                return empty("ineligible_current_population")
-            if not isinstance(report, EligibilityReport) or not report.eligible:
-                return empty("ineligible_current_population")
-
-    elite_pairs = sorted(enumerate(current), key=lambda pair: pair[1].j)[:config.elite_count]
+    elite_pairs = sorted(enumerate(current), key=lambda pair: ranking_key(pair[1]))[:config.elite_count]
     accepted = [individual for _, individual in elite_pairs]
     copies = Counter(route_signature(individual.route) for individual in accepted)
     rejected: Counter[str] = Counter()
@@ -297,11 +287,8 @@ def build_next_generation(
                         eligibility = EligibilityReport(False, ("eligibility_error",))
                 if not isinstance(eligibility, EligibilityReport):
                     eligibility = EligibilityReport(False, ("eligibility_error",))
-                if not eligibility.eligible:
-                    reasons = eligibility.reasons or ("ineligible_route",)
-                    rejected.update(set(reasons))
-                    events.append(GenerationEvent("admission", parents, accepted=False, reasons=tuple(reasons)))
-                    continue
+                evaluated = replace(evaluated, eligible=eligibility.eligible,
+                                    eligibility_reasons=eligibility.reasons)
             origin = "mutation" if mutation_changed else "crossover" if crossed_changed else "copy"
             events.append(GenerationEvent(
                 "admission", parents, len(accepted), changed=crossed_changed or mutation_changed,
@@ -319,7 +306,7 @@ def build_next_generation(
 
 
 def should_stop(history: Sequence[GenerationSnapshot], config: GAConfig) -> str | None:
-    """Сначала жёсткий предел переходов, затем включённая стагнация по строгому J."""
+    """Сначала предел переходов, затем стагнация по пригодности и исходной J."""
 
     if not history:
         return None
@@ -328,10 +315,10 @@ def should_stop(history: Sequence[GenerationSnapshot], config: GAConfig) -> str 
         return "generation_limit"
     if not config.stagnation_enabled:
         return None
-    best = history[0].population[history[0].best_index].j
+    best = ranking_key(history[0].population[history[0].best_index])
     last_improvement = 0
     for index, snapshot in enumerate(history[1:], 1):
-        current = snapshot.population[snapshot.best_index].j
+        current = ranking_key(snapshot.population[snapshot.best_index])
         if current < best:
             best, last_improvement = current, index
     return "stagnation" if transitions - last_improvement >= config.stagnation_window else None
@@ -394,8 +381,6 @@ def run_evolution(run_input: RunInput) -> RunResult:
         easy_limits = EasyLimits(fitness.easy_length_delta, fitness.easy_time_delta)
         eligible = (lambda metrics: check_easy_constraints(metrics, easy_references, easy_limits)) if (
             fitness.preset == "easy") else None
-        if eligible is not None and any(not eligible(metrics).eligible for metrics in initial_metrics):
-            return failed("invalid_initial_population", "P0 contains route outside easy limits")
 
         if fitness.normalization_mode == "auto":
             scales = run_input.auto_scales or compute_scales(initial_metrics)
@@ -409,18 +394,23 @@ def run_evolution(run_input: RunInput) -> RunResult:
                 return failed("invalid_input", "invalid manual scales")
         weights = resolve_preset(fitness.preset, fitness.weights)
 
-        def evaluate(route: Route) -> Individual:
-            metrics = measure(route)
-            return Individual(route, evaluate_cost(metrics, weights, scales), metrics)
+        def assess(route: Route, metrics: RouteMetrics) -> Individual:
+            report = eligible(metrics) if eligible is not None else EligibilityReport(True)
+            return Individual(route, evaluate_cost(metrics, weights, scales), metrics,
+                              report.eligible, report.reasons)
 
-        population = tuple(Individual(route, evaluate_cost(metrics, weights, scales), metrics)
+        def evaluate(route: Route) -> Individual:
+            return assess(route, measure(route))
+
+        population = tuple(assess(route, metrics)
                            for route, metrics in zip(initial, initial_metrics))
         events = tuple(GenerationEvent("admission", (), index, accepted=True, origin="initial")
                        for index in range(len(population)))
         history = [snapshot_generation(population, summarize_events(events), events, generation=0)]
-        best = history[0].population[history[0].best_index]
+        first_best = history[0].population[history[0].best_index]
+        best = first_best if first_best.eligible else None
         generation_context = GenerationContext(
-            routes, ga, MutationPolicy(production_weight_strategy(ga.random_weight_strength)), eligible,
+            routes, ga, MutationPolicy(production_weight_strategy(ga.random_weight_strength)),
         )
         seed_used = choose_seed(ga.seed)
         rng = Random(seed_used)
@@ -435,9 +425,10 @@ def run_evolution(run_input: RunInput) -> RunResult:
             history.append(snapshot)
             population = step.population
             candidate = snapshot.population[snapshot.best_index]
-            if candidate.j < best.j:
+            if candidate.eligible and (best is None or candidate.j < best.j):
                 best = candidate
-        return RunResult("completed", stop, tuple(history), best, scales, seed_used=seed_used)
+        return RunResult("completed", stop if best is not None else "no_eligible_route",
+                         tuple(history), best, scales, seed_used=seed_used)
     except (ValueError, TypeError, KeyError, OverflowError) as error:
         reason = "generation_failed" if history else "invalid_input"
         return failed(reason, str(error), history, best, scales)

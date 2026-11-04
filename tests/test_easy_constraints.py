@@ -91,7 +91,7 @@ def test_p0_rejects_ineligible_without_partial_success(route_context):
     assert dict(result.rejections)["easy_length_exceeded"] > 0
 
 
-def test_generation_rejects_ineligible_candidates(route_context):
+def test_generation_keeps_ineligible_candidates_below_eligible(route_context):
     routes = (
         Route(((1, 2, 0), (2, 5, 0), (5, 6, 0))),
         Route(((1, 2, 1), (2, 5, 0), (5, 6, 0))),
@@ -110,7 +110,8 @@ def test_generation_rejects_ineligible_candidates(route_context):
         current, context, Random(1),
         lambda route: Individual(route, 1, RouteMetrics(2000, 200, 0)),
     )
-    assert result.error == "attempts_exhausted"
-    assert result.population == () and result.accepted_count == 1
-    assert dict(result.rejections)["easy_length_exceeded"] == 2
-    assert dict(result.rejections)["easy_time_exceeded"] == 2
+    assert result.error is None and result.accepted_count == 4
+    assert result.population[0].eligible
+    assert all(not person.eligible for person in result.population[1:])
+    assert all(person.eligibility_reasons == ("easy_length_exceeded", "easy_time_exceeded")
+               for person in result.population[1:])

@@ -16,6 +16,7 @@ from algorithm.genetic.evolution import (
 from algorithm.genetic.initialization import generate_initial_population
 from algorithm.evaluation.fitness import resolve_preset
 from algorithm.genetic.mutation import MutationPolicy
+from algorithm.genetic.selection import tournament_select
 from algorithm.genetic.validation import validate_route
 from algorithm.models import GAConfig, Individual, RoadEdge, Route, RouteContext
 from config import default_config
@@ -79,6 +80,39 @@ def test_generation_zero_and_max_transitions(route_context: RouteContext) -> Non
     assert all(len(snapshot.population) == 4 for snapshot in run.history)
     assert all(snapshot.population[snapshot.best_index].j == run.best.j
                for snapshot in run.history)
+
+
+def test_easy_keeps_ineligible_p0_and_never_selects_it(route_context: RouteContext) -> None:
+    source = production_input(route_context, max_generations=1)
+    easy = replace(source.config.fitness, preset="easy", weights=resolve_preset("easy"),
+                   easy_length_delta=0, easy_time_delta=0)
+    outcome = run_evolution(replace(source, config=replace(source.config, fitness=easy)))
+    assert outcome.history and len(outcome.history[0].population) == 4
+    assert tuple(person.route for person in outcome.history[0].population) == source.initial_population
+    assert outcome.best is None or outcome.best.eligible
+    assert all(not person.eligible for person in outcome.history[0].population
+               if person.metrics.length_m > 3)
+
+
+def test_easy_without_eligible_route_keeps_history_but_has_no_winner(route_context: RouteContext) -> None:
+    source = production_input(route_context, max_generations=1)
+    easy = replace(source.config.fitness, preset="easy", weights=resolve_preset("easy"),
+                   easy_length_delta=0, easy_time_delta=0)
+    long_route = source.initial_population[-1]
+    outcome = run_evolution(replace(
+        source, initial_population=(long_route,) * 4,
+        config=replace(source.config, fitness=easy),
+    ))
+    assert outcome.status == "completed" and outcome.stop_reason == "no_eligible_route"
+    assert outcome.best is None and len(outcome.history[0].population) == 4
+    assert all(not person.eligible for person in outcome.history[0].population)
+
+
+def test_eligible_ranked_before_lower_j_ineligible(route_context: RouteContext) -> None:
+    route = production_input(route_context).initial_population[0]
+    invalid = Individual(route, 0.01, eligible=False)
+    valid = Individual(route, 2.0)
+    assert tournament_select((invalid, valid), 2, Random(7)) is valid
 
 
 def test_stagnation_on_off(route_context: RouteContext) -> None:

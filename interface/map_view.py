@@ -20,11 +20,10 @@ from algorithm.genetic.initialization import (
 )
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.evaluation.fitness import (
-    TimeModel, calculate_length, calculate_travel_time, check_easy_constraints,
-    compute_easy_references,
+    TimeModel, calculate_length, calculate_travel_time, compute_easy_references,
 )
 from algorithm.evaluation.normalization import compute_scales
-from algorithm.models import EasyLimits, Route, RouteContext, RouteMetrics
+from algorithm.models import Route, RouteContext, RouteMetrics
 from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
@@ -389,7 +388,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     "map-message-copy"
                 )
             elif not state.graph_loaded:
-                hint_label = ui.label("Дорожная сеть появится после загрузки согласованной области.").classes(
+                hint_label = ui.label("Дорожная сеть появится после загрузки области.").classes(
                     "map-message-copy"
                 )
                 async def load_area() -> None:
@@ -443,7 +442,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                         f"{road_data.metadata['edges']} рёбер. Выберите A и B. "
                         f"Неподдержанных отношений: {len(turn_rules.issues)}."
                     )
-                    hint_label.set_text("Режимы A/B и пробок выбираются слева; ЛКМ +1, ПКМ −1 на сегменте.")
+                    hint_label.set_text("Выберите A и B слева.")
                     button.set_visibility(False)
 
                 button = ui.button("Загрузить дороги", on_click=load_area).props("outline dense")
@@ -499,47 +498,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                             return
                         state.base_population = base
                         state.base_seed_used = seed_used
-                    easy_preflight = None
-                    eligible = None
-                    if app_config.fitness.preset == "easy":
-                        try:
-                            easy_preflight = await asyncio.to_thread(
-                                compute_easy_references, context, time_model,
-                            )
-                        except (ValueError, KeyError, OverflowError) as error:
-                            if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                                finish()
-                                return
-                            clear_population()
-                            state.easy_reference_error = f"L_min/T_min недоступны: {error}"
-                            if state.refresh_easy is not None:
-                                state.refresh_easy()
-                            population_label.set_text(f"P0 Лёгкого не сформирована: {error}")
-                            finish()
-                            return
-                        if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
-                            finish()
-                            return
-                        limits = EasyLimits(app_config.fitness.easy_length_delta,
-                                            app_config.fitness.easy_time_delta)
-
-                        def eligible(route: Route):
-                            metrics = RouteMetrics(
-                                calculate_length(route, context, time_model),
-                                calculate_travel_time(route, context, time_model), 0,
-                            )
-                            return check_easy_constraints(metrics, easy_preflight, limits)
-                    try:
-                        result = (await asyncio.to_thread(
-                            generate_initial_population, context, config,
-                            Random(seed_used ^ 0x9E3779B97F4A7C15),
-                            production_weight_strategy(config.random_weight_strength), eligible,
-                            base.population,
-                        ) if eligible is not None else base)
-                    except (ValueError, OverflowError) as error:
-                        population_label.set_text(f"P0 не сформирована: {error}")
-                        finish()
-                        return
+                    result = base
                     if (state.endpoint_a, state.endpoint_b, state.config) != (start, end, app_config):
                         finish()
                         return
@@ -548,7 +507,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     complexity_error = None
                     scales = None
                     scale_error = None
-                    easy_refs = easy_preflight
+                    easy_refs = None
                     easy_error = None
                     if result.error is None and app_config.fitness.penalties is not None:
                         def evaluate_p0():
@@ -557,15 +516,12 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                                 extract_penalty_events(route, context, policy),
                                 app_config.fitness.penalties,
                             ) for route in result.population)
-                            if easy_preflight is not None:
-                                references, reference_error = easy_preflight, None
-                            else:
-                                try:
-                                    references = compute_easy_references(context, time_model)
-                                    reference_error = None
-                                except (ValueError, KeyError, OverflowError) as error:
-                                    references = None
-                                    reference_error = f"L_min/T_min недоступны: {error}"
+                            try:
+                                references = compute_easy_references(context, time_model)
+                                reference_error = None
+                            except (ValueError, KeyError, OverflowError) as error:
+                                references = None
+                                reference_error = f"L_min/T_min недоступны: {error}"
                             route_previews = []
                             for route in result.population:
                                 try:
@@ -623,7 +579,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     state.initial_population = result
                     state.base_scales = base_scales
                     state.initial_seed_used = seed_used
-                    state.initial_population_preset = app_config.fitness.preset
+                    state.initial_population_preset = None
                     state.initial_complexities = breakdowns
                     state.initial_previews = previews
                     state.initial_scales = base_scales

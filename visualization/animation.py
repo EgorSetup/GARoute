@@ -84,7 +84,8 @@ def frame_layers(frame: Frame) -> tuple[StyledRoute, ...]:
     best_origin = sources.get(snapshot.best_index, "unknown")
     layers.append(StyledRoute(best.route, best_origin,
                               ORIGIN_COLORS.get(best_origin, ORIGIN_COLORS["unknown"]), 10, 0.85))
-    layers.append(StyledRoute(best.route, "best", ORIGIN_COLORS["best"], 5, 1.0))
+    if best.eligible:
+        layers.append(StyledRoute(best.route, "best", ORIGIN_COLORS["best"], 5, 1.0))
     return tuple(layers)
 
 

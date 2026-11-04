@@ -39,6 +39,16 @@ def test_cost_statistics() -> None:
     assert "безразмерная" in convergence.layout.yaxis.title.text
 
 
+def test_ineligible_never_appears_as_best_chart_value() -> None:
+    invalid = Individual(Route(()), 0.1, RouteMetrics(100, 10, 0), eligible=False)
+    valid = person(2.0)
+    stats = cost_statistics((snapshot(0, (invalid, valid)), snapshot(1, (invalid,))))
+    assert (stats[0].best, stats[0].mean) == (2.0, 1.05)
+    assert stats[1].best is None
+    assert tuple(build_convergence_chart((snapshot(0, (invalid, valid)),
+                                         snapshot(1, (invalid,)))).data[0].y) == (2.0, None)
+
+
 def test_diversity_definition() -> None:
     a, b, c = (1, 2, 0), (2, 3, 0), (3, 4, 0)
     identical = (person(1, a, b), person(2, a, b))

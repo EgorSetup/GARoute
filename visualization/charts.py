@@ -22,7 +22,7 @@ CHART_TITLES = (
 @dataclass(frozen=True, slots=True)
 class CostStatistics:
     generation: int
-    best: float
+    best: float | None
     mean: float
     median: float
     worst: float
@@ -33,7 +33,7 @@ def cost_statistics(history: Sequence[GenerationSnapshot]) -> tuple[CostStatisti
 
     return tuple(CostStatistics(
         snapshot.generation,
-        min(person.j for person in snapshot.population),
+        min((person.j for person in snapshot.population if person.eligible), default=None),
         fmean(person.j for person in snapshot.population),
         median(person.j for person in snapshot.population),
         max(person.j for person in snapshot.population),
@@ -60,7 +60,7 @@ def _figure(title: str, y_title: str) -> go.Figure:
     figure = go.Figure()
     figure.update_layout(
         title=title, xaxis_title="Поколение", yaxis_title=y_title,
-        margin=dict(l=50, r=20, t=45, b=45), height=260,
+        margin=dict(l=42, r=12, t=30, b=32), height=190,
         template="plotly_white", legend=dict(orientation="h", y=-0.28),
     )
     return figure
@@ -139,14 +139,20 @@ def render_charts(history_supplier: Callable[[], Sequence[GenerationSnapshot]]) 
         enlarged.open()
 
     containers = []
+
+    def chart_card(index: int) -> None:
+        with ui.card().classes("w-full chart-placeholder"):
+            body = ui.column().classes("w-full")
+            containers.append(body)
+            ui.button("Увеличить", icon="open_in_full",
+                      on_click=lambda i=index: show(i)).props("flat dense")
+
     with ui.column().classes("w-full chart-list"):
-        for index, title in enumerate(CHART_TITLES):
-            with ui.card().classes("w-full chart-placeholder"):
-                ui.label(title).classes("penalty-title")
-                body = ui.column().classes("w-full")
-                containers.append(body)
-                ui.button("Увеличить", icon="open_in_full",
-                          on_click=lambda i=index: show(i)).props("flat dense")
+        chart_card(0)
+        chart_card(1)
+        with ui.expansion("Другие графики", value=False).classes("w-full"):
+            chart_card(2)
+            chart_card(3)
 
     def refresh() -> None:
         history = tuple(history_supplier())

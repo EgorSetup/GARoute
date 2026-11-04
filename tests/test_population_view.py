@@ -26,7 +26,7 @@ def test_population_status_distinguishes_failure() -> None:
     assert "не сформирована" in population_status_text(failed)
     assert "duplicate_limit: 10" in population_status_text(failed)
     ready = PopulationResult((Route(((1, 2, 0),)),), 1, 1, ())
-    assert "не эволюция" in population_status_text(ready)
+    assert "1 маршрут" in population_status_text(ready)
 
 
 def test_render_replaces_layers() -> None:

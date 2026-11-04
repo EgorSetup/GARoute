@@ -43,30 +43,30 @@ STYLE = """
   body { background: var(--wash); color: var(--ink); }
   .nicegui-content { padding: 0 !important; }
   .app-shell { width: 100%; min-height: 100vh; }
-  .topbar { min-height: 78px; padding: 15px 24px; background: var(--deep);
+  .topbar { min-height: 56px; padding: 8px 14px; background: var(--deep);
     color: white; display: flex; align-items: center; justify-content: space-between;
     gap: 20px; flex-wrap: wrap; }
   .brand { display: flex; align-items: baseline; gap: 14px; }
-  .brand-name { font: 700 27px/1.1 system-ui, sans-serif; letter-spacing: -.03em; }
+  .brand-name { font: 700 23px/1.1 system-ui, sans-serif; letter-spacing: -.03em; }
   .brand-subtitle { color: #bcd0da; font: 400 13px/1.3 system-ui, sans-serif; }
   .top-actions { display: flex; align-items: center; gap: 7px; }
   .top-actions .q-btn { min-height: 35px; }
-  .workspace { display: grid; grid-template-columns: 248px minmax(0, 1fr) 360px;
-    gap: 12px; padding: 12px; height: calc(100vh - 78px); min-height: 620px; }
+  .workspace { display: grid; grid-template-columns: 205px minmax(0, 1fr) 340px;
+    gap: 8px; padding: 8px; height: calc(100vh - 56px); min-height: 560px; }
   .side-panel { min-width: 0; background: var(--paper); border: 1px solid var(--line);
-    border-radius: 12px; padding: 20px; overflow-y: auto; }
+    border-radius: 9px; padding: 12px; overflow-y: auto; }
   .panel-heading { font: 700 18px/1.3 system-ui, sans-serif; color: var(--ink); }
   .panel-copy { color: var(--muted); font: 400 13px/1.5 system-ui, sans-serif; }
-  .panel-section { padding-bottom: 18px; margin-bottom: 18px;
+  .panel-section { padding-bottom: 10px; margin-bottom: 10px;
     border-bottom: 1px solid var(--line); }
   .panel-section:last-child { border-bottom: 0; }
   .left-panel .q-field { width: 100%; }
-  .map-stage { position: relative; min-width: 0; min-height: 580px;
+  .map-stage { position: relative; min-width: 0; min-height: 500px;
     border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
     background: #dce9ec; }
-  .map-canvas { width: 100%; height: 100%; min-height: 580px; }
-  .map-message { position: absolute; z-index: 500; top: 18px; right: 18px;
-    max-width: 300px; padding: 15px 17px; background: rgba(255,255,255,.96);
+  .map-canvas { width: 100%; height: 100%; min-height: 500px; }
+  .map-message { position: absolute; z-index: 500; top: 12px; right: 12px;
+    max-width: 230px; padding: 8px 10px; background: rgba(255,255,255,.96);
     border: 1px solid var(--line); border-radius: 9px; pointer-events: none;
     box-shadow: 0 5px 24px rgba(18,49,71,.09); }
   .map-message-title { font: 700 15px/1.3 system-ui, sans-serif; }
@@ -78,23 +78,24 @@ STYLE = """
   .right-panel { padding: 0; display: flex; flex-direction: column; min-height: 0; }
   .right-panel .q-tabs { border-bottom: 1px solid var(--line); }
   .right-panel .q-tab-panels { flex: 1; min-height: 0; overflow-y: auto; }
-  .tab-content { padding: 20px; }
-  .setting-field { width: 100%; margin-top: 12px; }
+  .tab-content { padding: 10px; }
+  .setting-field { width: 100%; margin-top: 7px; }
   .setting-error { color: #a73835; font: 500 12px/1.4 system-ui, sans-serif; }
   .penalty-card { margin-top: 10px; box-shadow: none; border: 1px solid var(--line); }
   .penalty-title { font: 650 13px/1.3 system-ui, sans-serif; }
   .right-panel .q-expansion-item { border-bottom: 1px solid var(--line); }
-  .empty-block { margin-top: 18px; padding: 18px; border: 1px dashed #b9cbd4;
+  .empty-block { margin-top: 10px; padding: 10px; border: 1px dashed #b9cbd4;
     border-radius: 9px; background: #f7fafb; }
-  .results-section { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
-  .playback-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+  .results-section { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .result-overview { font: 650 15px/1.35 system-ui, sans-serif; margin-top: 8px; }
+  .playback-actions { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
   .playback-actions .q-btn { min-height: 30px; }
-  .chart-list { margin-top: 12px; }
+  .chart-list { margin-top: 6px; gap: 6px; }
   .chart-placeholder { box-shadow: none; border: 1px dashed #b9cbd4;
-    background: #f7fafb; min-height: 92px; }
+    background: #f7fafb; min-height: 70px; padding: 4px; }
   .chart-enlarged { width: min(90vw, 850px); min-height: 320px; }
   @media (max-width: 1120px) {
-    .workspace { grid-template-columns: 220px minmax(0, 1fr); height: auto; }
+    .workspace { grid-template-columns: 200px minmax(0, 1fr); height: auto; }
     .right-panel { grid-column: 1 / -1; min-height: 300px; }
   }
   @media (max-width: 720px) {
@@ -166,15 +167,6 @@ def _build_header(state: UIState, open_results) -> None:
                 "Воспроизвести", on_click=lambda: state.playback_action("play")
                 if state.playback_action is not None else None, icon="play_arrow",
             ).props("outline dense").disable()
-            back_top = ui.button(
-                "Шаг назад", on_click=lambda: state.playback_action("back")
-                if state.playback_action is not None else None, icon="skip_previous",
-            ).props("outline dense").disable()
-            next_top = ui.button(
-                "Шаг вперёд", on_click=lambda: state.playback_action("next")
-                if state.playback_action is not None else None, icon="skip_next",
-            ).props("outline dense").disable()
-
             def refresh_playback_header() -> None:
                 playback = state.playback
                 count = playback.generation_count
@@ -182,14 +174,6 @@ def _build_header(state: UIState, open_results) -> None:
                     play_top.enable()
                 else:
                     play_top.disable()
-                if count and playback.generation_index > 0:
-                    back_top.enable()
-                else:
-                    back_top.disable()
-                if count and playback.generation_index < count - 1:
-                    next_top.enable()
-                else:
-                    next_top.disable()
 
             state.refresh_playback_header = refresh_playback_header
 
@@ -198,7 +182,6 @@ def _build_left_panel(state: UIState) -> tuple[Input, Input]:
     with ui.element("aside").classes("side-panel left-panel"):
         with ui.element("section").classes("panel-section"):
             ui.label("Маршрут").classes("panel-heading")
-            ui.label("Выберите начало и конец после загрузки графа.").classes("panel-copy")
             endpoint_a = ui.input("Точка A").props("outlined dense disable")
             endpoint_b = ui.input("Точка B").props("outlined dense disable")
             if not state.demo_mode:
@@ -210,9 +193,7 @@ def _build_left_panel(state: UIState) -> tuple[Input, Input]:
                 ).props("outlined dense").classes("setting-field")
         with ui.element("section").classes("panel-section"):
             ui.label("Дорожные условия").classes("panel-heading")
-            ui.label("Режим «Редактировать пробки»: ЛКМ +1, ПКМ −1. Уровень 11 закрывает проезд.").classes(
-                "panel-copy"
-            )
+            ui.label("ЛКМ +1 · ПКМ −1 · 11 закрыто").classes("panel-copy")
             reset_button = ui.button(
                 "Сбросить пробки", on_click=lambda: state.request_traffic_reset()
                 if state.request_traffic_reset is not None else None,
@@ -228,15 +209,13 @@ def _build_left_panel(state: UIState) -> tuple[Input, Input]:
 
             state.refresh_traffic_controls = refresh_reset
         with ui.element("section").classes("panel-section"):
-            ui.label("Легенда").classes("panel-heading")
-            ui.label("Пробка: 1 — свободно, 2–10 — замедление, 11 — закрыто. Цвет линии показывает уровень визуального сегмента; расчётный уровень всего ребра определяется длиной покрытия.").classes("panel-copy")
+            ui.label("Пробки").classes("panel-heading")
             with ui.row().classes("w-full gap-1"):
                 for level, color in enumerate(TRAFFIC_COLORS, start=1):
                     ui.label(str(level)).style(
                         f"background:{color};color:white;min-width:20px;text-align:center;"
                         "border-radius:3px;font-size:11px;"
                     )
-            ui.label("Маршруты появятся после расчёта.").classes("panel-copy")
         if state.demo_mode:
             with ui.element("section").classes("panel-section"):
                 ui.label("ДЕМО: события карты").classes("panel-heading")
@@ -303,7 +282,6 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels, object]:
             results = ui.tab("Результаты")
         with ui.tab_panels(tabs, value=settings, keep_alive=True).classes("w-full") as panels:
             with ui.tab_panel(settings).classes("tab-content"):
-                ui.label("Настройки расчёта").classes("panel-heading")
                 build_ga_controls(state, submit)
                 build_fitness_controls(state, submit)
                 build_normalization_controls(state, submit)
