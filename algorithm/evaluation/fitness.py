@@ -103,6 +103,33 @@ class TimeModel:
     roads: Mapping[EdgeId, RoadEdge]
     levels: Mapping[EdgeId, int] = field(default_factory=dict)
     factors: Mapping[int, float] = field(default_factory=lambda: TRAFFIC_SPEED_FACTORS.copy())
+    modeled_speeds_enabled: bool = False
+    modeled_speeds_kph: Mapping[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedSpeed:
+    """Расчётная скорость и её источник; исходный RoadEdge не меняется."""
+
+    speed_kph: float
+    source: str
+
+
+def resolve_speed(edge: RoadEdge, model: TimeModel) -> ResolvedSpeed | None:
+    """Модель действует лишь для отсутствующего тега и явно заданного класса."""
+
+    speed = edge.speed_kph
+    if type(speed) in (int, float) and isfinite(speed) and speed > 0:
+        return ResolvedSpeed(float(speed), edge.speed_status)
+    if not model.modeled_speeds_enabled or edge.raw_speed is not None:
+        return None
+    road_class = edge.raw_attributes.get("highway")
+    if type(road_class) is not str:
+        return None
+    speed = model.modeled_speeds_kph.get(road_class)
+    if type(speed) not in (int, float) or not isfinite(speed) or speed <= 0:
+        return None
+    return ResolvedSpeed(float(speed), f"manual_model:{road_class}")
 
 
 def _valid_edges(route: Route, context: RouteContext, model: TimeModel):
@@ -139,10 +166,10 @@ def calculate_travel_time(route: Route, context: RouteContext, time_model: TimeM
     for edge_id, edge, factor in _valid_edges(route, context, time_model):
         if not isfinite(edge.length_m) or edge.length_m <= 0:
             raise ValueError(f"invalid length: {edge_id!r}")
-        speed = edge.speed_kph
-        if speed is None or not isfinite(speed) or speed <= 0:
+        resolved = resolve_speed(edge, time_model)
+        if resolved is None:
             raise ValueError(f"unknown or invalid speed: {edge_id!r}")
-        total += 3.6 * edge.length_m / (speed * factor)
+        total += 3.6 * edge.length_m / (resolved.speed_kph * factor)
     if not isfinite(total):
         raise ValueError("nonfinite route time")
     return total
@@ -161,8 +188,7 @@ def unknown_required_speeds(context: RouteContext, time_model: TimeModel) -> tup
         if edge is None:
             unknown.append(edge_id)
             continue
-        speed = edge.speed_kph
-        if speed is None or not isfinite(speed) or speed <= 0:
+        if resolve_speed(edge, time_model) is None:
             unknown.append(edge_id)
     return tuple(unknown)
 
@@ -185,7 +211,10 @@ def compute_easy_references(context: RouteContext, time_model: TimeModel) -> Eas
     def by_time(edge_id: EdgeId, _attributes: Mapping[str, object]) -> float:
         edge = time_model.roads[edge_id]
         level = time_model.levels.get(edge_id, 1)
-        return 3.6 * edge.length_m / (edge.speed_kph * speed_factor(level, time_model.factors))
+        resolved = resolve_speed(edge, time_model)
+        if resolved is None:
+            raise ValueError(f"unknown required speed: {edge_id!r}")
+        return 3.6 * edge.length_m / (resolved.speed_kph * speed_factor(level, time_model.factors))
 
     quickest = find_connector(context.start, context.end, context, Random(0),
                               weight=by_time, complete=True)

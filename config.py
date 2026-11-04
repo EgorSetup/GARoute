@@ -230,6 +230,18 @@ def _check_fitness(config: FitnessConfig, errors: list[str], unresolved: list[st
         if config.preset == "easy" and value is None:
             unresolved.append(f"Q05-C: {name} не согласован")
 
+    if type(config.modeled_speeds_enabled) is not bool:
+        errors.append("Режим модельных скоростей должен быть логическим")
+    entries = config.modeled_speeds_kph
+    if not isinstance(entries, tuple) or any(
+        not isinstance(item, tuple) or len(item) != 2 or
+        type(item[0]) is not str or not item[0] or
+        not _positive_number(item[1]) for item in entries
+    ):
+        errors.append("Модельные скорости: нужны классы и положительные значения км/ч")
+    elif len({name for name, _ in entries}) != len(entries):
+        errors.append("Модельные скорости: класс указан повторно")
+
 
 def validate_config(config: AppConfig) -> ValidationReport:
     """Проверить настройку перед запуском, не подставляя значения за пользователя."""

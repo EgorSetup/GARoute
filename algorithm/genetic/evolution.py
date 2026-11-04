@@ -367,7 +367,11 @@ def run_evolution(run_input: RunInput) -> RunResult:
             edge_id for edge_id, level in levels.items() if level == 11
         )
         routes = replace(run_input.routes, graph=graph, closed_edges=closed)
-        time_model = TimeModel(roads, levels)
+        time_model = TimeModel(
+            roads, levels,
+            modeled_speeds_enabled=run_input.config.fitness.modeled_speeds_enabled,
+            modeled_speeds_kph=dict(run_input.config.fitness.modeled_speeds_kph),
+        )
         penalties = PenaltyPolicy(roads)
         unknown = unknown_required_speeds(routes, time_model)
         if unknown:

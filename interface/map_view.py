@@ -15,7 +15,9 @@ from nicegui.elements.input import Input
 from nicegui.elements.label import Label
 from nicegui.elements.leaflet.leaflet import Leaflet
 
-from algorithm.genetic.initialization import choose_seed, generate_initial_population, production_weight_strategy
+from algorithm.genetic.initialization import (
+    PopulationResult, choose_seed, generate_initial_population, production_weight_strategy,
+)
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.evaluation.fitness import (
     TimeModel, calculate_length, calculate_travel_time, check_easy_constraints,
@@ -412,6 +414,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     state.traffic_levels = levels
                     state.graph_version += 1
                     state.graph_loaded = True
+                    if state.refresh_modeled_speeds is not None:
+                        state.refresh_modeled_speeds()
                     for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
                         layer = _road_geojson(normalized, graph, accessible)
                         if layer["features"]:
@@ -470,7 +474,11 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     config = app_config.ga
                     seed_used = state.base_seed_used if state.base_seed_used is not None else choose_seed(config.seed)
                     context = RouteContext(graph, start, end, state.turn_rules)
-                    time_model = TimeModel(roads.edges, dict(state.traffic_levels))
+                    time_model = TimeModel(
+                        roads.edges, dict(state.traffic_levels),
+                        modeled_speeds_enabled=app_config.fitness.modeled_speeds_enabled,
+                        modeled_speeds_kph=dict(app_config.fitness.modeled_speeds_kph),
+                    )
                     base = state.base_population
                     if not isinstance(base, PopulationResult) or base.error is not None:
                         try:

@@ -1,12 +1,13 @@
 """Подготовка независимого расчёта и приём только актуального результата."""
 
 from copy import deepcopy
+from collections import Counter
 from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from algorithm.genetic.evolution import RunInput, RunResult
 from algorithm.genetic.initialization import PopulationResult
-from algorithm.evaluation.fitness import TimeModel, unknown_required_speeds
+from algorithm.evaluation.fitness import TimeModel, resolve_speed, unknown_required_speeds
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
 from algorithm.models import AppConfig, ConditionKey, RouteContext
 from config import validate_config
@@ -39,6 +40,7 @@ class SavedRun:
     uncertain_penalties: int = 0
     visible: bool = True
     condition_key: ConditionKey | None = None
+    modeled_speed_usage: tuple[tuple[str, int], ...] = ()
 
 
 def build_condition_key(state: UIState) -> ConditionKey:
@@ -56,6 +58,7 @@ def build_condition_key(state: UIState) -> ConditionKey:
         tuple(sorted(state.segment_levels.items())), state.config.ga,
         fitness.penalties, (fitness.normalization_mode, *manual),
         (fitness.easy_length_delta, fitness.easy_time_delta), custom_weights,
+        (fitness.modeled_speeds_enabled, fitness.modeled_speeds_kph),
     )
 
 
@@ -110,10 +113,21 @@ def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
         return None, "Общие условия серии изменились; подтвердите очистку прежних результатов"
     run_input = build_run_snapshot(state)
     missing_speeds = unknown_required_speeds(
-        run_input.routes, TimeModel(run_input.roads, run_input.traffic_levels),
+        run_input.routes, TimeModel(
+            run_input.roads, run_input.traffic_levels,
+            modeled_speeds_enabled=run_input.config.fitness.modeled_speeds_enabled,
+            modeled_speeds_kph=dict(run_input.config.fitness.modeled_speeds_kph),
+        ),
     )
     if missing_speeds:
-        return None, f"Неизвестна скорость {len(missing_speeds)} доступных рёбер дороги"
+        classes = Counter(
+            str(run_input.roads[edge_id].raw_attributes.get("highway", "без класса"))
+            if edge_id in run_input.roads and run_input.roads[edge_id].raw_speed is None
+            else "неоднозначный maxspeed"
+            for edge_id in missing_speeds
+        )
+        details = ", ".join(f"{name}: {count}" for name, count in sorted(classes.items()))
+        return None, f"Неизвестна скорость {len(missing_speeds)} доступных рёбер дороги ({details})"
     run_id = uuid4().hex
     state.active_run_id = run_id
     state.active_run_input = run_input
@@ -169,6 +183,17 @@ def append_run_result(state: UIState, run_id: str, run_input: RunInput,
     if any(run.run_id == run_id for run in state.saved_runs):
         raise ValueError("duplicate run ID")
     uncertain = 0
+    modeled_usage: Counter[str] = Counter()
+    if outcome.best is not None:
+        speed_model = TimeModel(
+            run_input.roads, run_input.traffic_levels,
+            modeled_speeds_enabled=run_input.config.fitness.modeled_speeds_enabled,
+            modeled_speeds_kph=dict(run_input.config.fitness.modeled_speeds_kph),
+        )
+        for edge_id in outcome.best.route.edges:
+            resolved = resolve_speed(run_input.roads[edge_id], speed_model)
+            if resolved is not None and resolved.source.startswith("manual_model:"):
+                modeled_usage[resolved.source.removeprefix("manual_model:")] += 1
     if outcome.best is not None and run_input.config.fitness.penalties is not None:
         breakdown = calculate_penalties(
             extract_penalty_events(outcome.best.route, run_input.routes,
@@ -180,7 +205,7 @@ def append_run_result(state: UIState, run_id: str, run_input: RunInput,
         run_id, run_input.config, outcome.seed_used,
         run_input.routes.start, run_input.routes.end, outcome,
         RUN_COLORS[len(state.saved_runs) % len(RUN_COLORS)], uncertain,
-        condition_key=condition_key,
+        condition_key=condition_key, modeled_speed_usage=tuple(sorted(modeled_usage.items())),
     )
     state.saved_runs.append(record)
     return record

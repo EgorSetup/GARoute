@@ -165,6 +165,8 @@ class FitnessConfig:
     complexity_reference: float | None = None
     easy_length_delta: float | None = None  # Q05-C VERIFY, default_config задаёт 0.5
     easy_time_delta: float | None = None  # Q05-C VERIFY
+    modeled_speeds_enabled: bool = False
+    modeled_speeds_kph: tuple[tuple[str, float], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,6 +192,7 @@ class ConditionKey:
     normalization: tuple[str | None, float | None, float | None, float | None]
     easy_limits: tuple[float | None, float | None]
     custom_weights: tuple[float, float, float] | None
+    modeled_speeds: tuple[bool, tuple[tuple[str, float], ...]] = (False, ())
 
 
 @dataclass(frozen=True, slots=True)

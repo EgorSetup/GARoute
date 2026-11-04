@@ -1,6 +1,7 @@
 """Состояние интерфейса, которое позже свяжет виджеты с расчётом."""
 
 from dataclasses import dataclass, field, replace
+from collections import Counter
 from math import isfinite
 from typing import Callable
 
@@ -62,6 +63,7 @@ class UIState:
     refresh_population_results: Callable[[], None] | None = None
     refresh_normalization: Callable[[], None] | None = None
     refresh_easy: Callable[[], None] | None = None
+    refresh_modeled_speeds: Callable[[], None] | None = None
     clear_population_layers: Callable[[], None] | None = None
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
@@ -197,6 +199,8 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
         state.routing_graph = graph
         if state.refresh_traffic is not None:
             state.refresh_traffic()
+        if state.refresh_modeled_speeds is not None:
+            state.refresh_modeled_speeds()
         return True
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
@@ -428,6 +432,23 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
         if number is None or not 0 <= number <= EASY_DELTA_MAX * 100:
             return PendingChange(key, value, None, ("Превышение должно быть в диапазоне 0–200%",))
         updated = replace(fitness, **{key: number / 100})
+    elif key == "modeled_speeds_enabled":
+        if type(value) is not bool:
+            return PendingChange(key, value, None, ("Выберите режим модельных скоростей",))
+        updated = replace(fitness, modeled_speeds_enabled=value)
+    elif key == "modeled_speed":
+        if not isinstance(value, tuple) or len(value) != 2 or type(value[0]) is not str or not value[0]:
+            return PendingChange(key, value, None, ("Укажите класс дороги и скорость",))
+        road_class, raw_speed = value
+        speed = None if raw_speed in (None, "") else _numeric_input(raw_speed)
+        if raw_speed not in (None, "") and (speed is None or speed <= 0):
+            return PendingChange(key, value, None, ("Скорость должна быть положительным числом км/ч",))
+        values = dict(fitness.modeled_speeds_kph)
+        if speed is None:
+            values.pop(road_class, None)
+        else:
+            values[road_class] = speed
+        updated = replace(fitness, modeled_speeds_kph=tuple(sorted(values.items())))
     else:
         return PendingChange(key, value, None, ("Неизвестная настройка Fitness",))
 
@@ -694,6 +715,72 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
         details = ui.column().classes("w-full")
         state.refresh_normalization = render_references
         render_references()
+
+
+def build_modeled_speed_controls(state: UIState, submit: SubmitChange) -> None:
+    """Показывать только недостающие классы OSM без числовых подстановок."""
+
+    with ui.expansion("Учебная модель скоростей", value=False).classes("w-full"):
+        ui.label(
+            "Строгий режим блокирует расчёт без maxspeed. Учебный режим использует только "
+            "введённые вами км/ч; это допущение, а не скорость из OSM."
+        ).classes("panel-copy")
+        error_label = ui.label("").classes("setting-error")
+        fields = ui.column().classes("w-full")
+
+        def set_mode(value: object) -> None:
+            pending = propose_fitness_change(state, "modeled_speeds_enabled", value)
+            error_label.set_text("; ".join(pending.errors))
+            if not pending.errors:
+                old = state.config.fitness.modeled_speeds_enabled
+                submit(pending, lambda: mode_switch.set_value(old), render)
+
+        mode_switch = ui.switch(
+            "Использовать ручные скорости для дорог без maxspeed",
+            value=state.config.fitness.modeled_speeds_enabled,
+            on_change=lambda event: set_mode(event.value),
+        )
+
+        def change_speed(name: str, value: object, previous: float | None) -> None:
+            pending = propose_fitness_change(state, "modeled_speed", (name, value))
+            error_label.set_text("; ".join(pending.errors))
+            if not pending.errors:
+                submit(pending, lambda: widgets[name].set_value(previous), render)
+
+        def render() -> None:
+            fields.clear()
+            roads = state.normalized_roads
+            with fields:
+                if roads is None:
+                    ui.label("Сначала загрузите дорожный граф.").classes("panel-copy")
+                    return
+                graph = state.routing_graph
+                unknown = [roads.edges[edge_id] for edge_id in roads.unknown_speed_edges
+                           if graph is not None and graph.has_edge(*edge_id)
+                           and graph[edge_id[0]][edge_id[1]][edge_id[2]].get("car_access") is True
+                           and state.traffic_levels.get(edge_id, 1) != 11]
+                classes = Counter(
+                    edge.raw_attributes["highway"] for edge in unknown
+                    if edge.raw_speed is None and type(edge.raw_attributes.get("highway")) is str
+                )
+                ambiguous = len(unknown) - sum(classes.values())
+                ui.label(f"Доступных рёбер без исходной скорости: {len(unknown)}. "
+                         "Введите скорость для каждого класса, чтобы открыть расчёт.").classes("panel-copy")
+                if ambiguous:
+                    ui.label(f"Неоднозначных тегов или классов: {ambiguous}; модель их не заменяет.").classes(
+                        "setting-error"
+                    )
+                configured = dict(state.config.fitness.modeled_speeds_kph)
+                for road_class, count in sorted(classes.items()):
+                    widgets[road_class] = ui.number(
+                        f"{road_class} · рёбер: {count}, км/ч", value=configured.get(road_class),
+                        step=1, on_change=lambda event, name=road_class, old=configured.get(road_class):
+                        change_speed(name, event.value, old),
+                    ).props("outlined dense").classes("setting-field")
+
+        widgets: dict[str, Number] = {}
+        state.refresh_modeled_speeds = render
+        render()
 
 
 def build_ga_controls(state: UIState, submit: SubmitChange) -> None:

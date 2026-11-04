@@ -9,6 +9,7 @@ from nicegui.elements.input import Input
 
 from interface.controls import (
     UIState, PendingChange, build_fitness_controls, build_ga_controls,
+    build_modeled_speed_controls,
     build_normalization_controls, build_penalty_controls, cancel_change,
     confirm_change, request_condition_change,
 )
@@ -303,6 +304,7 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels, object]:
                 build_ga_controls(state, submit)
                 build_fitness_controls(state, submit)
                 build_normalization_controls(state, submit)
+                build_modeled_speed_controls(state, submit)
                 build_penalty_controls(state, submit)
             with ui.tab_panel(results).classes("tab-content"):
                 build_results_panel(state)
