@@ -112,6 +112,14 @@ BUILDERS = (build_convergence_chart, build_diversity_chart,
             build_quality_chart, build_operations_chart)
 
 
+def _plot(figure: go.Figure) -> None:
+    """Не вызывать Plotly resize у скрытой вкладки NiceGUI."""
+
+    options = figure.to_plotly_json()
+    options["config"] = {"responsive": False}
+    ui.plotly(options).classes("w-full")
+
+
 def render_charts(history_supplier: Callable[[], Sequence[GenerationSnapshot]]) -> Callable[[], None]:
     """Обновлять четыре места и увеличение только при смене истории."""
 
@@ -127,7 +135,7 @@ def render_charts(history_supplier: Callable[[], Sequence[GenerationSnapshot]]) 
                 ui.label(CHART_TITLES[index]).classes("panel-heading")
                 ui.label("Нет данных поколений.").classes("panel-copy")
             else:
-                ui.plotly(figures[index]).classes("w-full")
+                _plot(figures[index])
         enlarged.open()
 
     containers = []
@@ -151,7 +159,7 @@ def render_charts(history_supplier: Callable[[], Sequence[GenerationSnapshot]]) 
                         "panel-copy"
                     )
                 else:
-                    ui.plotly(figures[index]).classes("w-full")
+                    _plot(figures[index])
 
     refresh()
     return refresh

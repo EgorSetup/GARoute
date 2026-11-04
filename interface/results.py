@@ -156,6 +156,7 @@ def build_playback_controls(state: UIState) -> None:
             history = state.generation_history
             count = len(history)
             state.playback.generation_count = count
+            playback_timer.active = state.playback.playing and count > 1
             if not count:
                 summary.set_text("Истории поколений нет. Перемотка станет доступна после расчёта.")
                 frame_label.set_text("Поколение: нет данных")
@@ -214,7 +215,7 @@ def build_playback_controls(state: UIState) -> None:
                 refresh()
 
         state.refresh_playback = refresh
-        ui.timer(0.1, on_tick)
+        playback_timer = ui.timer(0.1, on_tick, active=False)
         refresh()
 
 

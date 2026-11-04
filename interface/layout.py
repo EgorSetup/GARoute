@@ -322,4 +322,8 @@ def build_layout(state: UIState) -> ViewHandles:
             tabs, panels, results = _build_right_panel(state)
             tabs_holder["tabs"] = tabs
             tabs_holder["results"] = results
+            tabs.on_value_change(
+                lambda event: state.refresh_charts()
+                if event.value == results and state.refresh_charts is not None else None,
+            )
     return ViewHandles(map_view=map_view, tabs=tabs, panels=panels)
