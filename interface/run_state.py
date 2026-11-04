@@ -8,7 +8,7 @@ from algorithm.genetic.evolution import RunInput, RunResult
 from algorithm.genetic.initialization import PopulationResult
 from algorithm.evaluation.fitness import TimeModel, unknown_required_speeds
 from algorithm.evaluation.penalties import PenaltyPolicy, calculate_penalties, extract_penalty_events
-from algorithm.models import AppConfig, RouteContext
+from algorithm.models import AppConfig, ConditionKey, RouteContext
 from config import validate_config
 from interface.controls import UIState
 from visualization.animation import load_history
@@ -38,6 +38,48 @@ class SavedRun:
     color: str
     uncertain_penalties: int = 0
     visible: bool = True
+    condition_key: ConditionKey | None = None
+
+
+def build_condition_key(state: UIState) -> ConditionKey:
+    """Сравнить только входные общие условия, исключив пресет и показ."""
+
+    fitness = state.config.fitness
+    manual = (fitness.time_reference_s, fitness.length_reference_m,
+              fitness.complexity_reference) if fitness.normalization_mode == "manual" else (None, None, None)
+    custom_weights = (fitness.weights if fitness.preset == "custom" else state.custom_weights)
+    return ConditionKey(
+        state.graph_version,
+        id(state.normalized_roads) if state.normalized_roads is not None else None,
+        (state.endpoint_a, state.endpoint_b), state.turn_rules.forbidden,
+        tuple(sorted(state.traffic_levels.items(), key=lambda item: repr(item[0]))),
+        tuple(sorted(state.segment_levels.items())), state.config.ga,
+        fitness.penalties, (fitness.normalization_mode, *manual),
+        (fitness.easy_length_delta, fitness.easy_time_delta), custom_weights,
+    )
+
+
+def build_run_snapshot(state: UIState) -> RunInput:
+    """Скопировать вход запуска без ссылок на изменяемый UI и его будущий результат."""
+
+    population = (state.initial_population if state.config.fitness.preset == "easy"
+                  else state.base_population or state.initial_population)
+    if not isinstance(population, PopulationResult) or state.routing_graph is None or state.normalized_roads is None:
+        raise ValueError("P0 or road graph is unavailable")
+    frozen_config = deepcopy(state.config)
+    seed_used = state.base_seed_used if state.base_seed_used is not None else state.initial_seed_used
+    if frozen_config.ga.seed is None and seed_used is not None:
+        frozen_config = replace(
+            frozen_config, ga=replace(frozen_config.ga, seed=seed_used),
+        )
+    return RunInput(
+        tuple(deepcopy(population.population)), frozen_config,
+        RouteContext(deepcopy(state.routing_graph), state.endpoint_a, state.endpoint_b,
+                     deepcopy(state.turn_rules)),
+        deepcopy(dict(state.normalized_roads.edges)),
+        traffic_levels=deepcopy(state.traffic_levels),
+        auto_scales=deepcopy(state.base_scales),
+    )
 
 
 def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
@@ -63,20 +105,10 @@ def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
         return None, "Размер P0 не совпадает с N"
     if state.config.fitness.preset == "easy" and state.initial_population_preset != "easy":
         return None, "Сформируйте P0 для пресета «Лёгкий»"
-    frozen_config = deepcopy(state.config)
-    seed_used = state.base_seed_used if state.base_seed_used is not None else state.initial_seed_used
-    if frozen_config.ga.seed is None and seed_used is not None:
-        frozen_config = replace(
-            frozen_config, ga=replace(frozen_config.ga, seed=seed_used),
-        )
-    run_input = RunInput(
-        tuple(deepcopy(population.population)), frozen_config,
-        RouteContext(deepcopy(state.routing_graph), state.endpoint_a, state.endpoint_b,
-                     deepcopy(state.turn_rules)),
-        deepcopy(dict(state.normalized_roads.edges)),
-        traffic_levels=deepcopy(state.traffic_levels),
-        auto_scales=deepcopy(state.base_scales),
-    )
+    condition_key = build_condition_key(state)
+    if state.saved_runs and state.series_condition_key != condition_key:
+        return None, "Общие условия серии изменились; подтвердите очистку прежних результатов"
+    run_input = build_run_snapshot(state)
     missing_speeds = unknown_required_speeds(
         run_input.routes, TimeModel(run_input.roads, run_input.traffic_levels),
     )
@@ -85,6 +117,7 @@ def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
     run_id = uuid4().hex
     state.active_run_id = run_id
     state.active_run_input = run_input
+    state.active_condition_key = condition_key
     state.run_status = "running"
     state.run_error = None
     if state.refresh_run is not None:
@@ -98,15 +131,19 @@ def apply_run_completion(state: UIState, run_id: str, outcome: RunResult) -> boo
     if state.active_run_id != run_id:
         return False
     run_input = state.active_run_input
+    condition_key = state.active_condition_key
     state.active_run_id = None
     state.active_run_input = None
+    state.active_condition_key = None
     state.run_status = outcome.status
     state.run_error = outcome.error
     state.latest_run = outcome
     if outcome.status == "completed":
         state.run_results.append(outcome)
         if isinstance(run_input, RunInput):
-            append_run_result(state, run_id, run_input, outcome)
+            append_run_result(state, run_id, run_input, outcome, condition_key)
+            if state.series_condition_key is None:
+                state.series_condition_key = condition_key
         state.generation_history = list(outcome.history)
         state.selected_run_id = run_id
         load_history(state.playback, state.generation_history)
@@ -124,7 +161,7 @@ def apply_run_completion(state: UIState, run_id: str, outcome: RunResult) -> boo
 
 
 def append_run_result(state: UIState, run_id: str, run_input: RunInput,
-                      outcome: RunResult) -> SavedRun:
+                      outcome: RunResult, condition_key: ConditionKey | None = None) -> SavedRun:
     """Добавить завершённый запуск с новым ID, включая повтор того же пресета."""
 
     if outcome.status != "completed":
@@ -143,6 +180,7 @@ def append_run_result(state: UIState, run_id: str, run_input: RunInput,
         run_id, run_input.config, outcome.seed_used,
         run_input.routes.start, run_input.routes.end, outcome,
         RUN_COLORS[len(state.saved_runs) % len(RUN_COLORS)], uncertain,
+        condition_key=condition_key,
     )
     state.saved_runs.append(record)
     return record

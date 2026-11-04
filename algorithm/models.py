@@ -176,6 +176,23 @@ class AppConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ConditionKey:
+    """Общие условия серии; пресет и вычисленные эталоны в ключ не входят."""
+
+    graph_version: int
+    graph_identity: int | None
+    endpoints: tuple[Hashable | None, Hashable | None]
+    forbidden_turns: frozenset[tuple[EdgeId, EdgeId]]
+    traffic_levels: tuple[tuple[EdgeId, int], ...]
+    segment_levels: tuple[tuple[str, int], ...]
+    ga: GAConfig
+    penalties: tuple[float, ...] | None
+    normalization: tuple[str | None, float | None, float | None, float | None]
+    easy_limits: tuple[float | None, float | None]
+    custom_weights: tuple[float, float, float] | None
+
+
+@dataclass(frozen=True, slots=True)
 class ValidationReport:
     """Ошибки чисел и открытые решения, препятствующие расчёту."""
 

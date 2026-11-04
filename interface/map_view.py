@@ -410,6 +410,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     state.turn_rules = turn_rules
                     state.traffic_segments = segments
                     state.traffic_levels = levels
+                    state.graph_version += 1
                     state.graph_loaded = True
                     for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
                         layer = _road_geojson(normalized, graph, accessible)

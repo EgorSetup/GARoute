@@ -10,7 +10,7 @@ from nicegui.elements.number import Number
 
 from algorithm.evaluation.penalties import PenaltyBreakdown
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
-from algorithm.models import AppConfig, EasyReferences, GAConfig, RouteContext, ValidationReport
+from algorithm.models import AppConfig, ConditionKey, EasyReferences, GAConfig, RouteContext, ValidationReport
 from config import (
     EASY_DELTA_MAX, PRESET_WEIGHTS, default_config, penalty_catalog, validate_config,
     working_penalty_defaults,
@@ -28,6 +28,7 @@ class UIState:
 
     config: AppConfig = field(default_factory=default_config)
     graph_loaded: bool = False
+    graph_version: int = 0
     road_data: RoadData | None = None
     normalized_roads: NormalizedRoadData | None = None
     routing_graph: nx.MultiDiGraph | None = None
@@ -78,6 +79,8 @@ class UIState:
     selected_run_id: str | None = None
     active_run_id: str | None = None
     active_run_input: object | None = None
+    active_condition_key: ConditionKey | None = None
+    series_condition_key: ConditionKey | None = None
     run_status: str = "idle"
     run_error: str | None = None
     latest_run: object | None = None
@@ -336,6 +339,8 @@ def confirm_change(state: UIState) -> UIState:
     state.chart_data.clear()
     state.selected_run_id = None
     state.active_run_input = None
+    state.active_condition_key = None
+    state.series_condition_key = None
     state.latest_run = None
     state.run_status = "idle"
     state.run_error = None
