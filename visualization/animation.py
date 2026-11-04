@@ -5,6 +5,7 @@ from math import floor, isfinite
 from typing import Sequence
 
 from algorithm.genetic.evolution import GenerationSnapshot
+from algorithm.models import Route
 
 
 @dataclass(slots=True)
@@ -30,6 +31,61 @@ class Frame:
 
     index: int
     snapshot: GenerationSnapshot
+    previous: GenerationSnapshot | None = None
+
+
+ORIGIN_COLORS = {
+    "initial": "#3c7892",
+    "elite": "#25834e",
+    "crossover": "#2563b9",
+    "mutation": "#8b43b5",
+    "copy": "#67849a",
+    "unknown": "#67849a",
+    "retired": "#99a4ad",
+    "best": "#d6a422",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class StyledRoute:
+    """Один слой фактической особи с сохранённым происхождением."""
+
+    route: Route
+    origin: str
+    color: str
+    weight: int
+    opacity: float
+    dashed: bool = False
+
+
+def frame_layers(frame: Frame) -> tuple[StyledRoute, ...]:
+    """Подготовить слои принятых и выбывших особей без геометрий отказов."""
+
+    snapshot = frame.snapshot
+    sources = {
+        event.child_index: event.origin or "unknown"
+        for event in snapshot.events
+        if event.accepted is True and event.child_index is not None
+    }
+    layers: list[StyledRoute] = []
+    previous = frame.previous
+    if previous is not None:
+        for event in snapshot.events:
+            if (event.kind == "retired" and event.parents
+                    and 0 <= event.parents[0] < len(previous.population)):
+                route = previous.population[event.parents[0]].route
+                layers.append(StyledRoute(route, "retired", ORIGIN_COLORS["retired"], 3, 0.45, True))
+    for index, person in enumerate(snapshot.population):
+        if index == snapshot.best_index:
+            continue
+        origin = sources.get(index, "unknown")
+        layers.append(StyledRoute(person.route, origin, ORIGIN_COLORS.get(origin, ORIGIN_COLORS["unknown"]), 5, 0.65))
+    best = snapshot.population[snapshot.best_index]
+    best_origin = sources.get(snapshot.best_index, "unknown")
+    layers.append(StyledRoute(best.route, best_origin,
+                              ORIGIN_COLORS.get(best_origin, ORIGIN_COLORS["unknown"]), 10, 0.85))
+    layers.append(StyledRoute(best.route, "best", ORIGIN_COLORS["best"], 5, 1.0))
+    return tuple(layers)
 
 
 def load_history(controller: PlaybackState, history: Sequence[GenerationSnapshot]) -> None:
@@ -46,7 +102,8 @@ def seek(history: Sequence[GenerationSnapshot], generation_index: int) -> Frame:
 
     if type(generation_index) is not int or not 0 <= generation_index < len(history):
         raise IndexError("generation index out of range")
-    return Frame(generation_index, history[generation_index])
+    return Frame(generation_index, history[generation_index],
+                 history[generation_index - 1] if generation_index > 0 else None)
 
 
 def set_index(controller: PlaybackState, history: Sequence[GenerationSnapshot],

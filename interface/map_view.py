@@ -33,6 +33,7 @@ from interface.controls import (
     propose_traffic_edit, reset_traffic, select_endpoint,
 )
 from interface.results import population_status_text
+from visualization.animation import Frame, frame_layers
 
 
 MAP_MODES = ("view", "A", "B", "traffic")
@@ -167,6 +168,33 @@ def render_population(map_element: Leaflet, population: Sequence[Route],
     return layers
 
 
+def clear_run_layers(map_element: Leaflet, layers: list[object]) -> None:
+    """Удалить предыдущий кадр до показа следующего."""
+
+    for layer in layers:
+        map_element.remove_layer(layer)
+    layers.clear()
+
+
+def render_frame(map_element: Leaflet, frame: Frame, roads: NormalizedRoadData,
+                 existing_layers: list[object]) -> list[object]:
+    """Показать фактические маршруты кадра и их сохранённое происхождение."""
+
+    clear_run_layers(map_element, existing_layers)
+    for styled in frame_layers(frame):
+        feature = {"type": "Feature", "geometry": {
+            "type": "LineString", "coordinates": route_geometry(styled.route, roads),
+        }}
+        options = {"color": styled.color, "weight": styled.weight,
+                   "opacity": styled.opacity, "interactive": False}
+        if styled.dashed:
+            options["dashArray"] = "6 5"
+        existing_layers.append(map_element.generic_layer(
+            name="geoJSON", args=[feature, {"style": options}],
+        ))
+    return existing_layers
+
+
 def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = None) -> MapHandle:
     """Показать область, реальные дороги и привязанные к графу точки A/B."""
 
@@ -191,17 +219,14 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
 
         state.refresh_traffic = refresh_traffic
 
-        def show_generation_frame(snapshot) -> None:
-            for layer in playback_layers:
-                map_element.remove_layer(layer)
-            playback_layers.clear()
-            if snapshot is None or state.normalized_roads is None:
+        def show_generation_frame(frame: Frame | None) -> None:
+            if frame is None or state.normalized_roads is None:
+                clear_run_layers(map_element, playback_layers)
                 return
             for layer in population_layers:
                 map_element.remove_layer(layer)
             population_layers.clear()
-            routes = tuple(individual.route for individual in snapshot.population)
-            playback_layers.extend(render_population(map_element, routes, state.normalized_roads))
+            render_frame(map_element, frame, state.normalized_roads, playback_layers)
 
         state.show_generation_frame = show_generation_frame
 

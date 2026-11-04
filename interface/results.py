@@ -13,7 +13,9 @@ from algorithm.models import RouteMetrics
 from config import penalty_catalog
 from interface.controls import RoutePreview, UIState
 from visualization.charts import render_empty_charts
-from visualization.animation import advance, pause, play, seek, set_index, set_playback_speed
+from visualization.animation import (
+    ORIGIN_COLORS, advance, pause, play, seek, set_index, set_playback_speed,
+)
 
 
 def _disabled_playback_button(label: str, icon: str) -> None:
@@ -77,6 +79,14 @@ def build_playback_controls(state: UIState) -> None:
 
     with ui.element("section").classes("results-section"):
         ui.label("Воспроизведение поколений").classes("panel-heading")
+        with ui.row().classes("w-full gap-1"):
+            for origin, title in (("elite", "Элита"), ("crossover", "Потомок"),
+                                  ("mutation", "Мутант"), ("retired", "Выбыл"),
+                                  ("best", "Лучший")):
+                ui.label(title).style(
+                    f"background:{ORIGIN_COLORS[origin]};color:white;padding:2px 7px;"
+                    "border-radius:4px;font-size:11px;"
+                )
         summary = ui.label("Истории поколений нет. Перемотка станет доступна после расчёта.").classes(
             "panel-copy"
         )
@@ -190,7 +200,7 @@ def build_playback_controls(state: UIState) -> None:
             key = (id(history), index)
             if key != rendered[0]:
                 if state.show_generation_frame is not None:
-                    state.show_generation_frame(snapshot)
+                    state.show_generation_frame(frame)
                 rendered[0] = key
             if state.refresh_playback_header is not None:
                 state.refresh_playback_header()
