@@ -52,8 +52,11 @@ def start_run(state: UIState) -> tuple[RunHandle | None, str | None]:
         RouteContext(deepcopy(state.routing_graph), state.endpoint_a, state.endpoint_b,
                      deepcopy(state.turn_rules)),
         deepcopy(dict(state.normalized_roads.edges)),
+        traffic_levels=deepcopy(state.traffic_levels),
     )
-    missing_speeds = unknown_required_speeds(run_input.routes, TimeModel(run_input.roads))
+    missing_speeds = unknown_required_speeds(
+        run_input.routes, TimeModel(run_input.roads, run_input.traffic_levels),
+    )
     if missing_speeds:
         return None, f"Неизвестна скорость {len(missing_speeds)} доступных рёбер дороги"
     run_id = uuid4().hex

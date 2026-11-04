@@ -1,6 +1,7 @@
 """Карта Leaflet и проверяемые режимы её событий."""
 
 import asyncio
+import json
 from dataclasses import dataclass
 from math import isfinite
 from random import Random
@@ -26,14 +27,19 @@ from config import GAROUTE_AREA
 from data.osm_loader import OSMLoadError, load_road_network
 from data.restrictions import apply_access_to_graph, build_forbidden_turns
 from data.road_graph import NormalizedRoadData, build_road_data
+from data.traffic import assign_edge_levels, build_visual_segments
 from interface.controls import (
     RoutePreview, UIState, cancel_change, confirm_change, request_condition_change,
-    select_endpoint,
+    propose_traffic_edit, reset_traffic, select_endpoint,
 )
 from interface.results import population_status_text
 
 
 MAP_MODES = ("view", "A", "B", "traffic")
+TRAFFIC_COLORS = (
+    "#167e91", "#4590a3", "#6ba6a4", "#8db599", "#b2bd81",
+    "#d4ba68", "#e2a44e", "#df8640", "#d66536", "#bf4b38", "#252a36",
+)
 
 
 def set_map_mode(state: UIState, mode: str) -> bool:
@@ -104,7 +110,7 @@ def snap_to_node(coords: tuple[float, float], graph: nx.MultiDiGraph, endpoint: 
     return None if best is None else best[1]
 
 
-def _prepare_roads():
+def _prepare_roads(segment_length: float):
     """Подготовить геометрию и запреты в рабочем потоке вне UI."""
 
     raw = load_road_network(GAROUTE_AREA)
@@ -112,9 +118,11 @@ def _prepare_roads():
         normalized = build_road_data(raw)
         graph, access_report = apply_access_to_graph(normalized)
         turn_rules = build_forbidden_turns(normalized.raw_relations, normalized)
+        segments = build_visual_segments(normalized, segment_length)
+        levels = assign_edge_levels(segments, {})
     except ValueError as error:
         raise OSMLoadError("format", str(error)) from error
-    return raw, normalized, graph, access_report, turn_rules
+    return raw, normalized, graph, access_report, turn_rules, segments, levels
 
 
 def _road_geojson(roads: NormalizedRoadData, graph: nx.MultiDiGraph, accessible: bool) -> dict:
@@ -168,6 +176,19 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
         map_element = ui.leaflet(center=center, zoom=13).classes("map-canvas")
         markers: dict[str, object] = {}
         population_layers: list[object] = []
+        segment_layers: dict[str, object] = {}
+        rendered_levels: dict[str, int] = {}
+
+        def refresh_traffic() -> None:
+            for segment_id, layer in segment_layers.items():
+                level = state.segment_levels.get(segment_id, 1)
+                if level != rendered_levels[segment_id]:
+                    layer.run_method("setStyle", {"color": TRAFFIC_COLORS[level - 1]})
+                    rendered_levels[segment_id] = level
+            if state.refresh_traffic_controls is not None:
+                state.refresh_traffic_controls()
+
+        state.refresh_traffic = refresh_traffic
 
         def clear_population() -> None:
             for layer in population_layers:
@@ -195,6 +216,60 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
 
         if not state.demo_mode:
             state.clear_population_layers = clear_population
+
+            with ui.dialog().props("persistent") as traffic_dialog, ui.card():
+                ui.label("Изменение пробки").classes("panel-heading")
+                ui.label("Все результаты предыдущих запусков будут удалены. Продолжить?")
+
+                def cancel_traffic() -> None:
+                    cancel_change(state)
+                    traffic_dialog.close()
+                    status_label.set_text("Изменение пробки отменено")
+
+                def confirm_traffic() -> None:
+                    confirm_change(state)
+                    traffic_dialog.close()
+                    status_label.set_text("Дорожные условия изменены; прежние результаты удалены")
+
+                with ui.row():
+                    ui.button("Отмена", on_click=cancel_traffic).props("flat")
+                    ui.button("Изменить и удалить", on_click=confirm_traffic).props("color=negative")
+
+            def submit_traffic(proposal) -> None:
+                result = request_condition_change(state, proposal)
+                if result.errors:
+                    status_label.set_text(result.errors[0])
+                elif state.pending_change is not None:
+                    traffic_dialog.open()
+                else:
+                    status_label.set_text("Дорожные условия изменены")
+
+            def request_reset() -> None:
+                if state.segment_levels:
+                    submit_traffic(reset_traffic(state))
+
+            state.request_traffic_reset = request_reset
+
+            def on_traffic_segment(e) -> None:
+                if state.map_mode != "traffic":
+                    return
+                segment_id = e.args.get("segment_id")
+                action = e.args.get("action")
+                if action not in ("increase", "decrease"):
+                    return
+                delta = 1 if action == "increase" else -1
+                previous = state.segment_levels.get(segment_id, 1)
+                submit_traffic(propose_traffic_edit(state, segment_id, delta))
+                if state.pending_change is None and previous != state.segment_levels.get(segment_id, 1):
+                    effective = {state.traffic_levels.get(interval.edge_id, 1)
+                                 for segment in state.traffic_segments.segments
+                                 if segment.segment_id == segment_id for interval in segment.coverage}
+                    status_label.set_text(
+                        f"Сегмент {segment_id}: уровень {state.segment_levels.get(segment_id, 1)}; "
+                        f"связанные рёбра: {', '.join(map(str, sorted(effective)))}"
+                    )
+
+            ui.on("garoute-traffic-segment", on_traffic_segment)
 
         def show_pair_status() -> None:
             if state.endpoint_a is not None and state.endpoint_b is not None:
@@ -259,7 +334,10 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     button.disable()
                     status_label.set_text("Загружаю автомобильную сеть OSM…")
                     try:
-                        road_data, normalized, graph, access_report, turn_rules = await asyncio.to_thread(_prepare_roads)
+                        (road_data, normalized, graph, access_report, turn_rules,
+                         segments, levels) = await asyncio.to_thread(
+                            _prepare_roads, state.config.ga.segment_length_m,
+                        )
                     except OSMLoadError as error:
                         show_load_error(MapHandle(map_element, status_label), error)
                         button.enable()
@@ -268,6 +346,8 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     state.normalized_roads = normalized
                     state.routing_graph = graph
                     state.turn_rules = turn_rules
+                    state.traffic_segments = segments
+                    state.traffic_levels = levels
                     state.graph_loaded = True
                     for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
                         layer = _road_geojson(normalized, graph, accessible)
@@ -276,12 +356,27 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                                 "style": {"color": color, "weight": 3 if accessible else 4,
                                           "opacity": 0.85, "interactive": False},
                             }])
+                    for visual in segments.segments:
+                        layer = map_element.generic_layer(name="polyline", args=[
+                            [[lat, lon] for lon, lat in visual.geometry_lonlat],
+                            {"color": TRAFFIC_COLORS[0], "weight": 7, "opacity": 0.8,
+                             "bubblingMouseEvents": False},
+                        ])
+                        segment_layers[visual.segment_id] = layer
+                        rendered_levels[visual.segment_id] = 1
+                        for event, action in (("click", "increase"), ("contextmenu", "decrease")):
+                            callback = (
+                                "function(e) { L.DomEvent.stop(e.originalEvent); "
+                                "emitEvent('garoute-traffic-segment', {segment_id:"
+                                f"{json.dumps(visual.segment_id)}, action:'{action}'}}); }}"
+                            )
+                            layer.run_method(":on", f"'{event}'", callback)
                     status_label.set_text(
                         f"Граф загружен: {road_data.metadata['nodes']} узлов, "
                         f"{road_data.metadata['edges']} рёбер. Выберите A и B. "
                         f"Неподдержанных отношений: {len(turn_rules.issues)}."
                     )
-                    hint_label.set_text("Режим A/B выбирается слева; бирюзовый — доступная дорога, серый — запрет.")
+                    hint_label.set_text("Режимы A/B и пробок выбираются слева; ЛКМ +1, ПКМ −1 на сегменте.")
                     button.set_visibility(False)
 
                 button = ui.button("Загрузить дороги", on_click=load_area).props("outline dense")
@@ -312,7 +407,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
                     config = app_config.ga
                     seed_used = choose_seed(config.seed)
                     context = RouteContext(graph, start, end, state.turn_rules)
-                    time_model = TimeModel(roads.edges)
+                    time_model = TimeModel(roads.edges, dict(state.traffic_levels))
                     easy_preflight = None
                     eligible = None
                     if app_config.fitness.preset == "easy":

@@ -16,8 +16,9 @@ from config import (
     working_penalty_defaults,
 )
 from data.osm_loader import RoadData
-from data.restrictions import TurnRules
+from data.restrictions import TurnRules, apply_access_to_graph
 from data.road_graph import NormalizedRoadData, check_reachability
+from data.traffic import SegmentCollection, assign_edge_levels
 from visualization.animation import PlaybackState
 
 
@@ -30,6 +31,12 @@ class UIState:
     road_data: RoadData | None = None
     normalized_roads: NormalizedRoadData | None = None
     routing_graph: nx.MultiDiGraph | None = None
+    traffic_segments: SegmentCollection | None = None
+    segment_levels: dict[str, int] = field(default_factory=dict)
+    traffic_levels: dict[tuple[object, object, object], int] = field(default_factory=dict)
+    refresh_traffic: Callable[[], None] | None = None
+    request_traffic_reset: Callable[[], None] | None = None
+    refresh_traffic_controls: Callable[[], None] | None = None
     turn_rules: TurnRules = field(default_factory=TurnRules)
     endpoint_a: object | None = None
     endpoint_b: object | None = None
@@ -165,6 +172,17 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
     if pending.key in ("endpoint_a", "endpoint_b"):
         setattr(state, pending.key, pending.value)
         return True
+    if pending.key in ("traffic_edit", "traffic_reset"):
+        segment_levels, edge_levels = pending.value
+        if state.normalized_roads is None:
+            return False
+        graph, _ = apply_access_to_graph(state.normalized_roads, edge_levels)
+        state.segment_levels = dict(segment_levels)
+        state.traffic_levels = dict(edge_levels)
+        state.routing_graph = graph
+        if state.refresh_traffic is not None:
+            state.refresh_traffic()
+        return True
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
         state.custom_weights = state.config.fitness.weights
@@ -193,6 +211,8 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
         return change
     if state.active_run_id is not None and change.key != "playback_speed":
         return PendingChange(change.key, change.value, None, ("Расчёт уже выполняется",))
+    if state.initial_population_running and change.key in ("traffic_edit", "traffic_reset"):
+        return PendingChange(change.key, change.value, None, ("Формирование P0 ещё выполняется",))
     if state.pending_change is not None:
         return PendingChange(change.key, change.value, None, ("Есть незавершённое изменение",))
     if change.key == "playback_speed":
@@ -204,7 +224,8 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
             state.pending_base_config = state.config
         else:
             apply_setting_change(state, change)
-    elif change.key == "preset" or change.candidate == state.config or not (
+    elif change.key == "preset" or (change.key not in ("traffic_edit", "traffic_reset")
+                                      and change.candidate == state.config) or not (
         state.run_results or state.generation_history or state.chart_data or state.initial_population
     ):
         apply_setting_change(state, change)
@@ -212,6 +233,44 @@ def request_condition_change(state: UIState, change: PendingChange) -> PendingCh
         state.pending_change = change
         state.pending_base_config = state.config
     return change
+
+
+def propose_traffic_edit(state: UIState, segment_id: str, delta: int) -> PendingChange:
+    """Предложить один шаг уровня, вычислив все связанные рёбра до применения."""
+
+    coverage = state.traffic_segments
+    if coverage is None or state.routing_graph is None:
+        return PendingChange("traffic_edit", None, None, ("Дорожные сегменты не готовы",))
+    if type(delta) is not int or delta not in (-1, 1):
+        return PendingChange("traffic_edit", None, None, ("Шаг уровня должен быть +1 или −1",))
+    if segment_id not in {item.segment_id for item in coverage.segments}:
+        return PendingChange("traffic_edit", None, None, ("Неизвестный сегмент",))
+    current = state.segment_levels.get(segment_id, 1)
+    updated = max(1, min(11, current + delta))
+    if updated == current:
+        return PendingChange("traffic_edit", None, None, (f"Уровень уже {current}",))
+    proposed = dict(state.segment_levels)
+    if updated == 1:
+        proposed.pop(segment_id, None)
+    else:
+        proposed[segment_id] = updated
+    try:
+        levels = assign_edge_levels(coverage, proposed)
+    except ValueError as error:
+        return PendingChange("traffic_edit", None, None, (str(error),))
+    return PendingChange("traffic_edit", (proposed, levels), state.config)
+
+
+def reset_traffic(state: UIState) -> PendingChange:
+    """Подготовить сброс всех сегментов к исходному уровню 1."""
+
+    if state.traffic_segments is None:
+        return PendingChange("traffic_reset", None, None, ("Дорожные сегменты не готовы",))
+    try:
+        levels = assign_edge_levels(state.traffic_segments, {})
+    except ValueError as error:
+        return PendingChange("traffic_reset", None, None, (str(error),))
+    return PendingChange("traffic_reset", ({}, levels), state.config)
 
 
 def select_endpoint(state: UIState, endpoint: str, node: object) -> PendingChange:

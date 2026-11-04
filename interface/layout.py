@@ -12,7 +12,7 @@ from interface.controls import (
     build_normalization_controls, build_penalty_controls, cancel_change,
     confirm_change, request_condition_change,
 )
-from interface.map_view import MapHandle, create_map, set_map_mode
+from interface.map_view import TRAFFIC_COLORS, MapHandle, create_map, set_map_mode
 from interface.results import build_results_panel
 from interface.run_state import apply_run_completion, start_run
 from algorithm.genetic.evolution import RunResult, run_evolution
@@ -172,19 +172,39 @@ def _build_left_panel(state: UIState) -> tuple[Input, Input]:
             endpoint_b = ui.input("Точка B").props("outlined dense disable")
             if not state.demo_mode:
                 ui.select(
-                    {"view": "Просмотр", "A": "Выбрать A", "B": "Выбрать B"},
+                    {"view": "Просмотр", "A": "Выбрать A", "B": "Выбрать B",
+                     "traffic": "Редактировать пробки"},
                     label="Режим карты", value="view",
                     on_change=lambda e: set_map_mode(state, e.value),
                 ).props("outlined dense").classes("setting-field")
         with ui.element("section").classes("panel-section"):
             ui.label("Дорожные условия").classes("panel-heading")
-            ui.label("Пробки и перекрытия станут доступны после подключения дорожных сегментов.").classes(
+            ui.label("Режим «Редактировать пробки»: ЛКМ +1, ПКМ −1. Уровень 11 закрывает проезд.").classes(
                 "panel-copy"
             )
-            _disabled_button("Изменить пробку", "Редактирование дорожных сегментов ещё не подключено", "traffic")
-            _disabled_button("Сбросить изменения", "Изменений пока нет", "restart_alt")
+            reset_button = ui.button(
+                "Сбросить пробки", on_click=lambda: state.request_traffic_reset()
+                if state.request_traffic_reset is not None else None,
+                icon="restart_alt",
+            ).props("outline dense")
+            reset_button.disable()
+
+            def refresh_reset() -> None:
+                if state.segment_levels and state.traffic_segments is not None:
+                    reset_button.enable()
+                else:
+                    reset_button.disable()
+
+            state.refresh_traffic_controls = refresh_reset
         with ui.element("section").classes("panel-section"):
             ui.label("Легенда").classes("panel-heading")
+            ui.label("Пробка: 1 — свободно, 2–10 — замедление, 11 — закрыто. Цвет линии показывает уровень визуального сегмента; расчётный уровень всего ребра определяется длиной покрытия.").classes("panel-copy")
+            with ui.row().classes("w-full gap-1"):
+                for level, color in enumerate(TRAFFIC_COLORS, start=1):
+                    ui.label(str(level)).style(
+                        f"background:{color};color:white;min-width:20px;text-align:center;"
+                        "border-radius:3px;font-size:11px;"
+                    )
             ui.label("Маршруты появятся после расчёта.").classes("panel-copy")
         if state.demo_mode:
             with ui.element("section").classes("panel-section"):
