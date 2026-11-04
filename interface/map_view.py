@@ -337,7 +337,7 @@ def create_map(state: UIState, *, endpoint_inputs: tuple[Input, Input] | None = 
 
         def show_pair_status() -> None:
             if state.endpoint_a is not None and state.endpoint_b is not None:
-                status_label.set_text("A/B выбраны и направленно достижимы. Сформируйте P0 и выберите настройки для расчёта.")
+                status_label.set_text("A/B выбраны и направленно достижимы.")
             elif state.endpoint_a is not None:
                 status_label.set_text("Точка A выбрана; теперь выберите B")
             elif state.endpoint_b is not None:
