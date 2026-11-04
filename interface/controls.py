@@ -41,6 +41,7 @@ class UIState:
     refresh_playback: Callable[[], None] | None = None
     playback_action: Callable[[str], None] | None = None
     refresh_playback_header: Callable[[], None] | None = None
+    refresh_charts: Callable[[], None] | None = None
     turn_rules: TurnRules = field(default_factory=TurnRules)
     endpoint_a: object | None = None
     endpoint_b: object | None = None
@@ -333,6 +334,8 @@ def confirm_change(state: UIState) -> UIState:
     state.playback = PlaybackState()
     if state.refresh_playback is not None:
         state.refresh_playback()
+    if state.refresh_charts is not None:
+        state.refresh_charts()
     state.initial_population = None
     state.initial_seed_used = None
     state.initial_population_preset = None

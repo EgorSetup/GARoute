@@ -87,4 +87,6 @@ def apply_run_completion(state: UIState, run_id: str, outcome: RunResult) -> boo
         state.refresh_run()
     if outcome.status == "completed" and state.refresh_playback is not None:
         state.refresh_playback()
+    if outcome.status == "completed" and state.refresh_charts is not None:
+        state.refresh_charts()
     return True

@@ -12,7 +12,7 @@ from algorithm.evaluation.normalization import NormalizationScales, validate_man
 from algorithm.models import RouteMetrics
 from config import penalty_catalog
 from interface.controls import RoutePreview, UIState
-from visualization.charts import render_empty_charts
+from visualization.charts import render_charts
 from visualization.animation import (
     ORIGIN_COLORS, advance, pause, play, seek, set_index, set_playback_speed,
 )
@@ -325,4 +325,4 @@ def build_results_panel(state: UIState) -> None:
     build_playback_controls(state)
     with ui.element("section").classes("results-section"):
         ui.label("Графики поколений").classes("panel-heading")
-        render_empty_charts()
+        state.refresh_charts = render_charts(lambda: state.generation_history)
