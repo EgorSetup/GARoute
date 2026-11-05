@@ -205,12 +205,33 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
         center = ((GAROUTE_AREA.north + GAROUTE_AREA.south) / 2,
                   (GAROUTE_AREA.east + GAROUTE_AREA.west) / 2)
         map_element = ui.leaflet(center=center, zoom=13).classes("map-canvas")
+        tile_layer = map_element.layers[0]
         markers: dict[str, object] = {}
+        graph_layers: list[object] = []
         population_layers: list[object] = []
         playback_layers: list[object] = []
         run_layers: list[object] = []
         segment_layers: dict[str, object] = {}
         rendered_levels: dict[str, int] = {}
+
+        def set_route_visibility(layers: list[object]) -> None:
+            for layer in layers:
+                opacity = layer.args[1]["style"]["opacity"] if state.layer_visibility["routes"] else 0
+                layer.run_method("setStyle", {"opacity": opacity})
+
+        def refresh_layers() -> None:
+            tile_layer.run_method("setOpacity", 1 if state.layer_visibility["map"] else 0)
+            for layer in graph_layers:
+                layer.run_method("setStyle", {"opacity": 1 if state.layer_visibility["graph"] else 0})
+            for layer in segment_layers.values():
+                layer.run_method("setStyle", {
+                    "opacity": 0.8 if state.layer_visibility["traffic"] else 0,
+                    "weight": 7 if state.layer_visibility["traffic"] else 0,
+                })
+            for layers in (population_layers, playback_layers, run_layers):
+                set_route_visibility(layers)
+
+        state.refresh_layers = refresh_layers
 
         def refresh_traffic() -> None:
             for segment_id, layer in segment_layers.items():
@@ -240,6 +261,7 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
                         "interactive": False,
                     }}],
                 ))
+            set_route_visibility(run_layers)
 
         state.refresh_run_overlays = refresh_run_overlays
 
@@ -251,6 +273,7 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
                 map_element.remove_layer(layer)
             population_layers.clear()
             render_frame(map_element, frame, state.normalized_roads, playback_layers)
+            set_route_visibility(playback_layers)
 
         state.show_generation_frame = show_generation_frame
 
@@ -410,13 +433,14 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
                 state.graph_loaded = True
                 state.graph_loading = False
                 state.graph_load_failed = False
-                for accessible, color in ((True, "#167e91"), (False, "#9aaab2")):
+                for accessible in (True, False):
                     layer = _road_geojson(normalized, graph, accessible)
                     if layer["features"]:
-                        map_element.generic_layer(name="geoJSON", args=[layer, {
-                            "style": {"color": color, "weight": 3 if accessible else 4,
-                                      "opacity": 0.85, "interactive": False},
-                        }])
+                        graph_layers.append(map_element.generic_layer(name="geoJSON", args=[layer, {
+                            "style": {"color": "#111111", "weight": 1,
+                                      "opacity": 1 if state.layer_visibility["graph"] else 0,
+                                      "interactive": False},
+                        }]))
                 for visual in segments.segments:
                     layer = map_element.generic_layer(name="polyline", args=[
                         [[lat, lon] for lon, lat in visual.geometry_lonlat],
@@ -432,6 +456,7 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
                             f"{json.dumps(visual.segment_id)}, action:'{action}'}}); }}"
                         )
                         layer.run_method(":on", f"'{event}'", callback)
+                refresh_layers()
                 status_label.set_text("Дороги готовы · выберите A и B")
                 if state.refresh_map_controls is not None:
                     state.refresh_map_controls()
@@ -574,6 +599,7 @@ def create_map(state: UIState, *, status_label: Label, population_label: Label) 
                 state.easy_reference_error = easy_error
                 if result.error is None:
                     population_layers.extend(render_population(map_element, result.population, roads))
+                    set_route_visibility(population_layers)
                 status = population_status_text(result)
                 if complexity_error is not None:
                     status += f" C не вычислена: {complexity_error}."

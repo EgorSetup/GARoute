@@ -10,7 +10,7 @@ from nicegui.elements.label import Label
 from interface.controls import (
     UIState, PendingChange, build_fitness_controls, build_ga_controls,
     build_normalization_controls, build_penalty_controls, cancel_change,
-    confirm_change, request_condition_change,
+    confirm_change, propose_settings_reset, request_condition_change,
 )
 from interface.map_view import MapHandle, create_map, set_map_mode
 from interface.results import build_results_panel
@@ -36,19 +36,12 @@ STYLE = """
     --line: #d8e2e8;
     --paper: #ffffff;
     --wash: #eef4f6;
-    --deep: #123147;
-    --accent: #167e91;
   }
   body { background: var(--wash); color: var(--ink); }
   .nicegui-content { padding: 0 !important; }
   .app-shell { width: 100%; min-height: 100vh; }
-  .topbar { min-height: 44px; padding: 4px 12px; background: var(--deep);
-    color: white; display: flex; align-items: center; justify-content: space-between;
-    gap: 20px; flex-wrap: wrap; }
-  .top-actions { display: flex; align-items: center; gap: 7px; }
-  .top-actions .q-btn { min-height: 35px; }
   .workspace { display: grid; grid-template-columns: 205px minmax(0, 1fr) 340px;
-    gap: 8px; padding: 8px; height: calc(100vh - 44px); min-height: 560px; }
+    gap: 8px; padding: 8px; height: 100vh; min-height: 500px; }
   .side-panel { min-width: 0; background: var(--paper); border: 1px solid var(--line);
     border-radius: 9px; padding: 12px; overflow-y: auto; }
   .panel-heading { font: 700 18px/1.3 system-ui, sans-serif; color: var(--ink); }
@@ -58,11 +51,16 @@ STYLE = """
   .panel-section:last-child { border-bottom: 0; }
   .mode-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
   .mode-grid .q-btn { min-width: 0; padding: 4px 3px; font-size: 11px; }
+  .layer-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; }
+  .layer-grid .q-btn { min-width: 0; padding: 4px 3px; font-size: 11px; }
+  .layer-on { background: #167e91 !important; color: white !important; }
+  .left-panel { display: flex; flex-direction: column; gap: 8px; }
+  .left-bottom { margin-top: auto; }
   .mode-active { outline: 2px solid #167e91; outline-offset: -2px; }
   .mode-set { background: #228f55 !important; color: white !important; }
   .map-stage { position: relative; min-width: 0; min-height: 500px;
     border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
-    background: #dce9ec; }
+    background: #f4f7f8; }
   .map-canvas { width: 100%; height: 100%; min-height: 500px; }
   .map-demo-status { position: absolute; z-index: 500; bottom: 25px; left: 18px;
     max-width: 80%; padding: 8px 10px; background: white; border: 1px solid #ce3f35;
@@ -71,10 +69,13 @@ STYLE = """
   .right-panel .q-tabs { border-bottom: 1px solid var(--line); }
   .right-panel .q-tab-panels { flex: 1; min-height: 0; overflow-y: auto; }
   .tab-content { padding: 10px; }
-  .setting-field { width: 100%; margin-top: 7px; }
+  .setting-field { width: 100%; margin-top: 4px; }
+  .setting-row { display: grid; grid-template-columns: minmax(112px, 1.3fr) minmax(58px, 1fr) 72px;
+    gap: 4px; align-items: center; width: 100%; padding: 3px 0; }
+  .setting-row-label { min-width: 0; font-size: 12px; line-height: 1.2; overflow-wrap: anywhere; }
+  .setting-row .q-slider { min-width: 0; }
+  .setting-row .q-field { width: 72px; min-width: 0; }
   .setting-error { color: #a73835; font: 500 12px/1.4 system-ui, sans-serif; }
-  .penalty-card { margin-top: 10px; box-shadow: none; border: 1px solid var(--line); }
-  .penalty-title { font: 650 13px/1.3 system-ui, sans-serif; }
   .right-panel .q-expansion-item { border-bottom: 1px solid var(--line); }
   .empty-block { margin-top: 10px; padding: 10px; border: 1px dashed #b9cbd4;
     border-radius: 9px; background: #f7fafb; }
@@ -91,7 +92,6 @@ STYLE = """
     .right-panel { grid-column: 1 / -1; min-height: 300px; }
   }
   @media (max-width: 720px) {
-    .topbar { padding: 6px; }
     .workspace { display: flex; flex-direction: column; padding: 8px; min-height: 0; }
     .map-stage, .map-canvas { min-height: 420px; }
     .map-stage { order: -1; }
@@ -101,22 +101,25 @@ STYLE = """
 """
 
 
-def _disabled_button(label: str, reason: str, icon: str | None = None) -> None:
-    """Показать недоступную команду и причину блокировки."""
-
-    button = ui.button(label, icon=icon).props("outline dense").disable()
-    button.tooltip(reason)
-
-
-def _build_header(state: UIState, open_results) -> None:
-    with ui.element("header").classes("topbar"):
-        with ui.element("div").classes("top-actions"):
+def _build_left_panel(state: UIState, open_results) -> tuple[Label, Label]:
+    with ui.element("aside").classes("side-panel left-panel"):
+        with ui.element("section").classes("panel-section"):
+            with ui.element("div").classes("mode-grid"):
+                buttons = {
+                    mode: ui.button(label, on_click=lambda m=mode: set_map_mode(state, m)).props("outline dense")
+                    for mode, label in (("A", "Точка A"), ("B", "Точка B"),
+                                        ("view", "Просмотр"), ("traffic", "Пробки"))
+                }
+        with ui.element("section").classes("panel-section"):
+            p0_button = ui.button(
+                "Начальная популяция", on_click=lambda: state.create_p0() if state.create_p0 else None,
+            ).props("outline dense").classes("w-full")
             async def calculate() -> None:
                 handle, error = start_run(state)
                 if handle is None:
                     state.run_status = "failed"
                     state.run_error = error
-                    refresh()
+                    refresh_run()
                     return
                 try:
                     outcome = await asyncio.to_thread(run_evolution, handle.run_input)
@@ -125,64 +128,37 @@ def _build_header(state: UIState, open_results) -> None:
                 if apply_run_completion(state, handle.run_id, outcome) and outcome.status == "completed":
                     open_results()
 
-            button = ui.button("Рассчитать", on_click=calculate, icon="route").props("outline dense")
-            status = ui.label("").classes("panel-copy")
-
-            def refresh() -> None:
-                ready = (isinstance(state.initial_population, PopulationResult)
-                         and state.initial_population.error is None
-                         and not state.initial_population_running)
-                if ready and state.active_run_id is None:
-                    button.enable()
-                else:
-                    button.disable()
-                if state.run_status == "running":
-                    status.set_text("Идёт расчёт…")
-                elif state.run_error:
-                    if state.run_error == "attempts_exhausted":
-                        status.set_text("Не удалось заполнить поколение за ограниченное число попыток")
-                    else:
-                        status.set_text(f"Расчёт недоступен: {state.run_error}")
-                elif state.run_status == "completed":
-                    status.set_text("Расчёт завершён")
-                else:
-                    status.set_text("")
-
-            state.refresh_run = refresh
-            refresh()
-            play_top = ui.button(
-                "Воспроизвести", on_click=lambda: state.playback_action("play")
-                if state.playback_action is not None else None, icon="play_arrow",
-            ).props("outline dense").disable()
-            def refresh_playback_header() -> None:
-                playback = state.playback
-                count = playback.generation_count
-                if count > 1 and not playback.playing:
-                    play_top.enable()
-                else:
-                    play_top.disable()
-
-            state.refresh_playback_header = refresh_playback_header
-
-
-def _build_left_panel(state: UIState) -> tuple[Label, Label]:
-    with ui.element("aside").classes("side-panel left-panel"):
-        with ui.element("section").classes("panel-section"):
-            with ui.element("div").classes("mode-grid"):
-                buttons = {
-                    mode: ui.button(label, on_click=lambda m=mode: set_map_mode(state, m)).props("outline dense")
-                    for mode, label in (("view", "Просмотр"), ("A", "Точка A"),
-                                        ("B", "Точка B"), ("traffic", "Пробки"))
-                }
-            p0_button = ui.button(
-                "Создать P0", on_click=lambda: state.create_p0() if state.create_p0 else None,
-            ).props("outline dense").classes("w-full")
+            calculate_button = ui.button("Расчёт", on_click=calculate, icon="route").props(
+                "outline dense"
+            ).classes("w-full")
+            run_status = ui.label("").classes("panel-copy")
             status_label = ui.label("Загрузка дорог…").classes("panel-copy")
             population_label = ui.label("").classes("panel-copy")
             retry_button = ui.button(
                 "Повторить загрузку", on_click=lambda: state.load_roads() if state.load_roads else None,
             ).props("flat dense")
             retry_button.set_visibility(False)
+
+            def refresh_run() -> None:
+                ready = (isinstance(state.initial_population, PopulationResult)
+                         and state.initial_population.error is None
+                         and not state.initial_population_running)
+                (calculate_button.enable if ready and state.active_run_id is None
+                 else calculate_button.disable)()
+                if state.run_status == "running":
+                    run_status.set_text("Идёт расчёт…")
+                elif state.run_error:
+                    if state.run_error == "attempts_exhausted":
+                        run_status.set_text("Не удалось заполнить поколение за ограниченное число попыток")
+                    else:
+                        run_status.set_text(f"Расчёт недоступен: {state.run_error}")
+                elif state.run_status == "completed":
+                    run_status.set_text("Расчёт завершён")
+                else:
+                    run_status.set_text("")
+
+            state.refresh_run = refresh_run
+            refresh_run()
 
             def refresh_map_controls() -> None:
                 for mode, button in buttons.items():
@@ -207,11 +183,34 @@ def _build_left_panel(state: UIState) -> tuple[Label, Label]:
             state.refresh_map_controls = refresh_map_controls
             refresh_map_controls()
         with ui.element("section").classes("panel-section"):
+            with ui.element("div").classes("layer-grid"):
+                layer_buttons = {
+                    key: ui.button(label, on_click=lambda name=key: toggle_layer(name)).props("outline dense")
+                    for key, label in (("graph", "Граф"), ("traffic", "Пробки"),
+                                       ("routes", "Маршруты"), ("map", "Карта"))
+                }
+
+            def toggle_layer(key: str) -> None:
+                state.layer_visibility[key] = not state.layer_visibility[key]
+                if state.refresh_layers is not None:
+                    state.refresh_layers()
+                refresh_layer_buttons()
+
+            def refresh_layer_buttons() -> None:
+                for key, button in layer_buttons.items():
+                    button.classes(add="layer-on" if state.layer_visibility[key] else None,
+                                   remove="layer-on" if not state.layer_visibility[key] else None)
+
+            refresh_layer_buttons()
+        with ui.element("section").classes("left-bottom"):
             reset_button = ui.button(
-                "Сбросить пробки", on_click=lambda: state.request_traffic_reset()
+                "Сброс пробок", on_click=lambda: state.request_traffic_reset()
                 if state.request_traffic_reset is not None else None,
                 icon="restart_alt",
-            ).props("outline dense")
+            ).props("outline dense").classes("w-full")
+            ui.button("Сброс настроек", on_click=lambda: state.reset_settings()
+                      if state.reset_settings is not None else None,
+                      icon="settings_backup_restore").props("outline dense").classes("w-full")
             reset_button.disable()
 
             def refresh_reset() -> None:
@@ -270,10 +269,19 @@ def _build_right_panel(state: UIState) -> tuple[Tabs, TabPanels, object]:
             results = ui.tab("Результаты")
         with ui.tab_panels(tabs, value=settings, keep_alive=True).classes("w-full") as panels:
             with ui.tab_panel(settings).classes("tab-content"):
-                build_ga_controls(state, submit)
-                build_fitness_controls(state, submit)
-                build_normalization_controls(state, submit)
-                build_penalty_controls(state, submit)
+                settings_content = ui.column().classes("w-full").style("gap:0")
+                def render_settings() -> None:
+                    settings_content.clear()
+                    with settings_content:
+                        build_ga_controls(state, submit)
+                        build_fitness_controls(state, submit)
+                        build_normalization_controls(state, submit)
+                        build_penalty_controls(state, submit)
+
+                render_settings()
+                state.reset_settings = lambda: submit(
+                    propose_settings_reset(state), lambda: None, render_settings,
+                )
             with ui.tab_panel(results).classes("tab-content"):
                 build_results_panel(state)
     return tabs, panels, results
@@ -285,9 +293,10 @@ def build_layout(state: UIState) -> ViewHandles:
     ui.add_head_html(STYLE)
     tabs_holder = {}
     with ui.element("div").classes("app-shell"):
-        _build_header(state, lambda: tabs_holder["tabs"].set_value(tabs_holder["results"]))
         with ui.element("main").classes("workspace"):
-            status_labels = _build_left_panel(state)
+            status_labels = _build_left_panel(
+                state, lambda: tabs_holder["tabs"].set_value(tabs_holder["results"]),
+            )
             map_view = create_map(state, status_label=status_labels[0], population_label=status_labels[1])
             tabs, panels, results = _build_right_panel(state)
             tabs_holder["tabs"] = tabs

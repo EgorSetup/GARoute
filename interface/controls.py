@@ -10,7 +10,7 @@ from nicegui.elements.number import Number
 
 from algorithm.evaluation.penalties import PenaltyBreakdown
 from algorithm.evaluation.normalization import NormalizationScales, validate_manual_scales
-from algorithm.models import AppConfig, ConditionKey, EasyReferences, GAConfig, RouteContext, ValidationReport
+from algorithm.models import AppConfig, ConditionKey, EasyReferences, RouteContext, ValidationReport
 from config import (
     EASY_DELTA_MAX, PRESET_WEIGHTS, default_config, penalty_catalog, validate_config,
     working_penalty_defaults,
@@ -39,10 +39,12 @@ class UIState:
     refresh_traffic: Callable[[], None] | None = None
     request_traffic_reset: Callable[[], None] | None = None
     refresh_traffic_controls: Callable[[], None] | None = None
+    layer_visibility: dict[str, bool] = field(default_factory=lambda: {
+        "graph": False, "traffic": True, "routes": True, "map": True,
+    })
+    refresh_layers: Callable[[], None] | None = None
     show_generation_frame: Callable[[object | None], None] | None = None
     refresh_playback: Callable[[], None] | None = None
-    playback_action: Callable[[str], None] | None = None
-    refresh_playback_header: Callable[[], None] | None = None
     refresh_charts: Callable[[], None] | None = None
     turn_rules: TurnRules = field(default_factory=TurnRules)
     endpoint_a: object | None = None
@@ -65,6 +67,7 @@ class UIState:
     custom_weights: tuple[float, float, float] | None = None
     map_mode: str = "view"
     refresh_map_controls: Callable[[], None] | None = None
+    reset_settings: Callable[[], None] | None = None
     create_p0: Callable[[], object] | None = None
     load_roads: Callable[[], object] | None = None
     graph_load_failed: bool = False
@@ -116,6 +119,49 @@ class RoutePreview:
 
 
 SubmitChange = Callable[[PendingChange, Callable[[], None], Callable[[], None]], None]
+
+
+def _setting_pair(label: str, value: float | int | None, minimum: float,
+                  maximum: float | None, step: float, on_commit: Callable[[object], None]) -> Number:
+    """Связать ползунок и ручной ввод; применять значение при отпускании ползунка."""
+
+    upper = maximum if maximum is not None else max(minimum + 10 * step, (value or minimum) * 2)
+    syncing = False
+    with ui.element("div").classes("setting-row"):
+        ui.label(label).classes("setting-row-label")
+
+        def slide(event) -> None:
+            nonlocal syncing
+            if syncing:
+                return
+            syncing = True
+            number.set_value(event.value)
+            syncing = False
+
+        slider = ui.slider(min=minimum, max=upper, step=step,
+                           value=value if value is not None else minimum,
+                           on_change=slide).props("dense")
+
+        def type_number(event) -> None:
+            nonlocal syncing
+            if syncing:
+                return
+            entered = event.value
+            if isinstance(entered, (int, float)) and isfinite(entered) and entered >= minimum:
+                if maximum is None and entered > slider._props["max"]:
+                    slider._props["max"] = entered * 2
+                    slider.update()
+                syncing = True
+                slider.set_value(entered)
+                syncing = False
+            on_commit(entered)
+
+        number = ui.number(value=value, min=minimum, max=maximum, step=step,
+                           on_change=type_number).props("outlined dense")
+        slider.on("change", lambda event: on_commit(
+            event.args if isinstance(event.args, (int, float)) else slider.value
+        ))
+    return number
 
 
 INTEGER_FIELDS = {
@@ -201,6 +247,8 @@ def apply_setting_change(state: UIState, pending: PendingChange) -> bool:
     state.config = pending.candidate
     if pending.key == "weights" and state.config.fitness.preset == "custom":
         state.custom_weights = state.config.fitness.weights
+    elif pending.key == "settings_reset":
+        state.custom_weights = None
     if state.refresh_population_results is not None:
         state.refresh_population_results()
     if state.refresh_run is not None:
@@ -434,10 +482,11 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
     return PendingChange(key, value, candidate if not errors else None, errors)
 
 
-def reset_ga_defaults(state: UIState) -> None:
-    """Сбросить лишь принятые настройки ГА, сохранив будущие настройки Fitness."""
+def propose_settings_reset(state: UIState) -> PendingChange:
+    """Вернуть все параметры панели настроек к стартовым значениям."""
 
-    state.config = replace(state.config, ga=GAConfig())
+    defaults = default_config()
+    return PendingChange("settings_reset", None, defaults)
 
 
 def propose_penalty_change(state: UIState, index: int, value: object) -> PendingChange:
@@ -455,19 +504,10 @@ def propose_penalty_change(state: UIState, index: int, value: object) -> Pending
     return PendingChange("penalties", number, candidate if not errors else None, errors)
 
 
-def propose_penalty_reset(state: UIState) -> PendingChange:
-    """Предложить возврат к рабочим Q04 VERIFY без немедленной очистки P0."""
-
-    defaults = working_penalty_defaults()
-    candidate = replace(state.config, fitness=replace(state.config.fitness, penalties=defaults))
-    return PendingChange("penalties_reset", defaults, candidate)
-
-
 def build_penalty_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать рабочие коэффициенты, ограничения и подтверждаемое изменение."""
 
     with ui.expansion("Штрафы сложности", value=False).classes("w-full"):
-        ui.label("Неизвестные признаки показаны отдельно.").classes("panel-copy")
         values = state.config.fitness.penalties
         error_label = ui.label("").classes("setting-error")
         widgets: dict[int, Number] = {}
@@ -480,32 +520,16 @@ def build_penalty_controls(state: UIState, submit: SubmitChange) -> None:
                 submit(pending, lambda: widgets[index].set_value(old), lambda: None)
         for index, item in enumerate(penalty_catalog()):
             value = values[index] if values is not None and index < len(values) else None
-            with ui.card().classes("w-full penalty-card"):
-                ui.label(f"{item.id} · {item.name}").classes("penalty-title")
-                if item.feature_available is False:
-                    ui.label("Признак недоступен в графе уровня дорог.").classes("setting-error")
-                widgets[index] = ui.number(
-                    f"Баллы (0–{item.maximum_points:g})", value=value,
-                    min=0, max=item.maximum_points, step=0.5,
-                    on_change=lambda event, i=index: change(i, event.value),
-                ).props("outlined dense").classes("setting-field")
-
-        def reset() -> None:
-            pending = propose_penalty_reset(state)
-            def update_widgets() -> None:
-                for index, widget in widgets.items():
-                    widget.set_value(state.config.fitness.penalties[index])
-                error_label.set_text("")
-            submit(pending, lambda: None, update_widgets)
-
-        ui.button("Сбросить коэффициенты", on_click=reset).props("outline").classes("w-full")
+            widgets[index] = _setting_pair(
+                item.name, value, 0, item.maximum_points, 0.5,
+                lambda new_value, i=index: change(i, new_value),
+            )
 
 
 def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать пресеты и веса без выдуманных значений для открытых решений."""
 
-    with ui.expansion("Пресет и веса Fitness", value=True).classes("w-full"):
-        ui.label("Меньшая J — лучший результат.").classes("panel-copy")
+    with ui.expansion("Параметры Fitness-функции", value=True).classes("w-full"):
         error_label = ui.label("").classes("setting-error")
         details = None
         easy_details = None
@@ -532,12 +556,8 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
                             submit(pending, render_weights, lambda: None)
 
                     for index, name in enumerate(("Время T", "Длина L", "Сложность C")):
-                        ui.number(
-                            name + ", %", value=draft[index], min=0, max=100, step=1,
-                            on_change=lambda event, i=index: change_weight(i, event.value),
-                        ).props("outlined dense").classes("setting-field")
-                else:
-                    ui.label("Выберите пресет; веса пока не заданы.").classes("panel-copy")
+                        _setting_pair(name + ", %", draft[index], 0, 100, 1,
+                                      lambda value, i=index: change_weight(i, value))
 
         def select_preset(value: object) -> None:
             if value == state.config.fitness.preset:
@@ -572,14 +592,13 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
             if state.config.fitness.preset != "easy":
                 return
             with easy_details:
-                ui.label("Пределы L и T применяются к итоговому маршруту, не к P0.").classes("panel-copy")
                 if state.easy_references is not None:
                     ui.label(f"L_min: {state.easy_references.length_min_m:.2f} м; "
                              f"T_min: {state.easy_references.time_min_s:.2f} с").classes("panel-copy")
                 elif state.easy_reference_error is not None:
                     ui.label(state.easy_reference_error).classes("setting-error")
                 else:
-                    ui.label("L_min/T_min появятся после оценки P0.").classes("panel-copy")
+                    ui.label("Lmin/Tmin: ожидается P0").classes("panel-copy")
                 fields = (("easy_length_delta", "Превышение длины δL, %"),
                           ("easy_time_delta", "Превышение времени δT, %"))
                 for key, label in fields:
@@ -588,10 +607,8 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
                         error_label.set_text("; ".join(pending.errors))
                         if not pending.errors:
                             submit(pending, render_easy, render_easy)
-                    ui.number(label, value=getattr(state.config.fitness, key) * 100,
-                              min=0, max=200, step=10,
-                              on_change=lambda event, field=key: change(event.value, field)
-                              ).props("outlined dense").classes("setting-field")
+                    _setting_pair(label, getattr(state.config.fitness, key) * 100,
+                                  0, 200, 10, lambda value, field=key: change(value, field))
 
         state.refresh_easy = render_easy
         render_easy()
@@ -600,8 +617,7 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
 def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать выбор режима и ручные эталоны с единицами."""
 
-    with ui.expansion("Нормализация и эталоны", value=False).classes("w-full"):
-        ui.label("J = wT·T/Tref + wL·L/Lref + wC·C/Cref.").classes("panel-copy")
+    with ui.expansion("Параметры нормализации", value=False).classes("w-full"):
         error_label = ui.label("").classes("setting-error")
         details = None
         fields = (
@@ -616,24 +632,17 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
             fitness = state.config.fitness
             with details:
                 if fitness.normalization_mode == "auto":
-                    ui.label("По P0: Tref=mean(T), Lref=mean(L), Cref=max(1, mean(C)).").classes(
-                        "panel-copy"
-                    )
                     scales = state.initial_scales
                     if scales is None:
-                        ui.label(state.initial_scale_error or "Будет вычислено после полной P0.").classes(
+                        ui.label(state.initial_scale_error or "Эталоны: ожидается P0").classes(
                             "setting-error" if state.initial_scale_error else "panel-copy"
                         )
                     else:
-                        ui.label("Предварительно по P0; эталоны этого снимка не меняются при новых поколениях.").classes("panel-copy")
                         for label, value in (("Tref, секунды", scales.time_s),
                                              ("Lref, метры", scales.length_m),
                                              ("Cref, баллы", scales.complexity)):
                             ui.label(f"{label}: {value:.2f}").classes("panel-copy")
-                        if any(item.uncertain for item in state.initial_complexities):
-                            ui.label("Cref основан на C_observed: часть признаков неизвестна/недоступна.").classes("setting-error")
                 elif fitness.normalization_mode == "manual":
-                    ui.label("Введите все три положительных эталона.").classes("panel-copy")
 
                     def change_reference(key: str, value: object) -> None:
                         pending = propose_fitness_change(state, key, value)
@@ -648,12 +657,10 @@ def build_normalization_controls(state: UIState, submit: SubmitChange) -> None:
 
                     reference_widgets: dict[str, Number] = {}
                     for key, label in fields:
-                        reference_widgets[key] = ui.number(
-                            label, value=getattr(fitness, key), min=0, step=1,
-                            on_change=lambda event, field=key: change_reference(field, event.value),
-                        ).props("outlined dense").classes("setting-field")
-                else:
-                    ui.label("Выберите режим нормализации.").classes("panel-copy")
+                        reference_widgets[key] = _setting_pair(
+                            label, getattr(fitness, key), 0, None, 1,
+                            lambda value, field=key: change_reference(field, value),
+                        )
 
         def select_mode(value: object) -> None:
             if value == state.config.fitness.normalization_mode:
@@ -706,74 +713,43 @@ def build_ga_controls(state: UIState, submit: SubmitChange) -> None:
     def add_number(
         key: str, label: str, value: float | int | None, *,
         minimum: float | None = None, maximum: float | None = None,
-        step: float = 1, help_text: str = "",
+        step: float = 1,
     ) -> None:
-        widget = ui.number(
-            label, value=value, min=minimum, max=maximum, step=step,
-            on_change=lambda event, field=key: change(field, event.value),
-        ).props("outlined dense").classes("setting-field")
-        if help_text:
-            widget.tooltip(help_text)
-        widgets[key] = widget
+        widgets[key] = _setting_pair(label, value, minimum or 0, maximum, step,
+                                     lambda new_value, field=key: change(field, new_value))
 
     ga = state.config.ga
-    with ui.expansion("Параметры ГА", value=False).classes("w-full"):
-        ui.label("Поиск маршрутов, а не свойства дорог.").classes("panel-copy")
+    with ui.expansion("Параметры начальной популяции", value=False).classes("w-full"):
         add_number("population_size", "Размер популяции N", ga.population_size,
-                   minimum=5, maximum=50, help_text="Диапазон интерфейса 5–50")
+                   minimum=5, maximum=50)
+        add_number("initial_length_factor", "Предел длины ×Lmin", ga.initial_length_factor,
+                   minimum=1, step=0.1)
+        add_number("min_waypoints", "Мин. промеж. вершин", ga.min_waypoints, minimum=1)
+        add_number("max_waypoints", "Макс. промеж. вершин", ga.max_waypoints, minimum=1)
+        add_number("attempts_per_slot", "Попытки на место", ga.attempts_per_slot, minimum=1)
+        add_number("max_copies", "Максимум копий особи", ga.max_copies, minimum=1)
+        add_number("random_weight_strength", "Сила случайных весов",
+                   ga.random_weight_strength, minimum=0, step=0.1)
+
+    with ui.expansion("Параметры ГА", value=False).classes("w-full"):
         add_number("elite_count", "Элитизм E", ga.elite_count, minimum=0)
         add_number("crossover_percent", "Скрещивание, %",
                    ga.crossover_probability * 100, minimum=0, maximum=100)
-        add_number("mutation_percent", "Мутация, %",
-                   ga.mutation_probability * 100, minimum=0, maximum=100)
-        add_number("max_generations", "Переходы поколений", ga.max_generations,
-                   minimum=1, help_text="P0 считается отдельно")
-        add_number("max_copies", "Максимум копий особи", ga.max_copies, minimum=1)
-        add_number("attempts_per_slot", "Попытки на свободное место",
-                   ga.attempts_per_slot, minimum=1)
+        add_number("tournament_size", "Размер турнира", ga.tournament_size, minimum=1)
 
-    with ui.expansion("Операторы и ограничения", value=False).classes("w-full"):
+    with ui.expansion("Параметры мутации", value=False).classes("w-full"):
         mutation_select = ui.select({"A": "A — заменить участок", "B": "B — через промежуточную точку"},
                   label="Метод мутации", value=ga.mutation_method,
                   on_change=lambda event: change("mutation_method", event.value)
                   ).props("outlined dense").classes("setting-field")
-        add_number("tournament_size", "Размер турнира", ga.tournament_size,
-                   minimum=1)
-        add_number("initial_length_factor", "Предел начальной длины, ×L_min",
-                   ga.initial_length_factor, minimum=1, step=0.1)
-        ui.label("L_min — кратчайший допустимый путь при текущих условиях; он нужен только для ограничения P0 и не добавляется в популяцию.").classes("panel-copy")
-        add_number("min_waypoints", "Минимум промежуточных вершин",
-                   ga.min_waypoints, minimum=1)
-        add_number("max_waypoints", "Максимум промежуточных вершин",
-                   ga.max_waypoints, minimum=1)
+        add_number("mutation_percent", "Мутация, %",
+                   ga.mutation_probability * 100, minimum=0, maximum=100)
 
-    with ui.expansion("Остановка и параметры поиска", value=False).classes("w-full"):
-        ui.label("Стагнация означает отсутствие улучшения, а не найденный оптимум.").classes(
-            "panel-copy"
-        )
+    with ui.expansion("Параметры стагнации", value=False).classes("w-full"):
         stagnation_switch = ui.switch(
             "Останавливать при стагнации", value=ga.stagnation_enabled,
             on_change=lambda event: change("stagnation_enabled", event.value),
         )
         add_number("stagnation_window", "Окно стагнации",
                    ga.stagnation_window, minimum=1)
-        add_number("random_weight_strength", "Сила случайных весов",
-                   ga.random_weight_strength, minimum=0, step=0.1)
-
-    def reset() -> None:
-        pending = PendingChange("ga_reset", None, replace(state.config, ga=GAConfig()))
-
-        def update_widgets() -> None:
-            defaults = state.config.ga
-            for key, widget in widgets.items():
-                value = getattr(defaults, PERCENT_FIELDS.get(key, key))
-                widget.set_value(value * 100 if key in PERCENT_FIELDS else value)
-            mutation_select.set_value(defaults.mutation_method)
-            stagnation_switch.set_value(defaults.stagnation_enabled)
-            error_label.set_text("")
-
-        submit(pending, lambda: None, update_widgets)
-
-    ui.button("Сбросить параметры ГА", on_click=reset, icon="restart_alt").props(
-        "outline"
-    ).classes("w-full")
+        add_number("max_generations", "Переходы поколений", ga.max_generations, minimum=1)

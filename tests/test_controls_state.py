@@ -5,15 +5,14 @@ from interface.controls import (
     apply_setting_change,
     propose_fitness_change,
     propose_setting_change,
-    reset_ga_defaults,
     propose_penalty_change,
-    propose_penalty_reset,
+    propose_settings_reset,
     request_condition_change,
     cancel_change,
     confirm_change,
     validate_scales,
 )
-from config import penalty_catalog
+from config import default_config, penalty_catalog
 
 
 def test_config_roundtrip() -> None:
@@ -30,15 +29,30 @@ def test_config_roundtrip() -> None:
     assert state.config.ga.crossover_probability == 0.65
 
 
-def test_reset_known_defaults() -> None:
+def test_settings_reset_preserves_map_conditions_and_confirms_results() -> None:
     state = UIState()
-    apply_setting_change(state, propose_setting_change(state, "elite_count", 1))
+    state.endpoint_a, state.endpoint_b = 1, 2
+    state.segment_levels["road"] = 3
+    state.layer_visibility["map"] = False
+    apply_setting_change(state, propose_setting_change(state, "population_size", 5))
+    apply_setting_change(state, propose_fitness_change(state, "preset", "custom"))
+    apply_setting_change(state, propose_fitness_change(state, "weights", (20, 30, 50)))
+    state.initial_population = object()
+    state.run_results.append(object())
 
-    reset_ga_defaults(state)
+    request_condition_change(state, propose_settings_reset(state))
+    assert state.pending_change is not None
+    assert state.config.ga.population_size == 5
+    assert state.run_results
+    confirm_change(state)
 
-    assert state.config.ga.elite_count == 2
-    assert state.config.ga.random_weight_strength == 1.0
-    assert state.config.ga.stagnation_window == 10
+    assert state.config == default_config()
+    assert state.custom_weights is None
+    assert (state.endpoint_a, state.endpoint_b) == (1, 2)
+    assert state.segment_levels == {"road": 3}
+    assert state.layer_visibility["map"] is False
+    assert state.initial_population is None
+    assert state.run_results == []
 
 
 def test_mutation_choice() -> None:
@@ -131,7 +145,7 @@ def test_reduced_penalty_catalog() -> None:
     assert catalog[4].working_points == 5
 
 
-def test_penalty_change_and_reset_use_confirmation() -> None:
+def test_penalty_change_uses_confirmation() -> None:
     state = UIState()
     assert state.config.fitness.penalties[0] == 5
     assert propose_penalty_change(state, 0, 16).errors
@@ -146,10 +160,4 @@ def test_penalty_change_and_reset_use_confirmation() -> None:
     request_condition_change(state, pending)
     confirm_change(state)
     assert state.config.fitness.penalties[0] == 4
-    assert state.initial_population is None
-    state.initial_population = object()
-    request_condition_change(state, propose_penalty_reset(state))
-    assert state.config.fitness.penalties[0] == 4
-    confirm_change(state)
-    assert state.config.fitness.penalties[0] == 5
     assert state.initial_population is None

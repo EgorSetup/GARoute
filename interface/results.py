@@ -134,16 +134,6 @@ def build_playback_controls(state: UIState, on_refresh: Callable[[], None] | Non
                 move(max(0, min(len(state.generation_history) - 1,
                                 state.playback.generation_index + delta)))
 
-        def header_action(action: str) -> None:
-            if action == "play":
-                start()
-            elif action == "back":
-                step(-1)
-            elif action == "next":
-                step(1)
-
-        state.playback_action = header_action
-
         with ui.element("div").classes("playback-actions"):
             back_button = ui.button("Шаг назад", on_click=lambda: step(-1), icon="skip_previous").props("outline dense")
             play_button = ui.button("Воспроизвести", on_click=start, icon="play_arrow").props("outline dense")
@@ -181,8 +171,6 @@ def build_playback_controls(state: UIState, on_refresh: Callable[[], None] | Non
                 if rendered[0] is not None and state.show_generation_frame is not None:
                     state.show_generation_frame(None)
                 rendered[0] = None
-                if state.refresh_playback_header is not None:
-                    state.refresh_playback_header()
                 if on_refresh is not None:
                     on_refresh()
                 return
@@ -216,8 +204,6 @@ def build_playback_controls(state: UIState, on_refresh: Callable[[], None] | Non
                 if state.show_generation_frame is not None:
                     state.show_generation_frame(frame)
                 rendered[0] = key
-            if state.refresh_playback_header is not None:
-                state.refresh_playback_header()
             if on_refresh is not None:
                 on_refresh()
 
