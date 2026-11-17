@@ -441,11 +441,13 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
     if key == "preset":
         if value not in ("fast", "short", "easy", "custom"):
             return PendingChange(key, value, None, ("Неизвестный пресет",))
-        weights = PRESET_WEIGHTS.get(value, state.custom_weights if value == "custom" else None)
+        weights = PRESET_WEIGHTS.get(
+            value, (state.custom_weights or fitness.weights) if value == "custom" else None,
+        )
         updated = replace(fitness, preset=value, weights=weights)
     elif key == "weights":
-        if fitness.preset != "custom":
-            return PendingChange(key, value, None, ("Веса меняются только в пользовательском пресете",))
+        if fitness.preset not in (*PRESET_WEIGHTS, "custom"):
+            return PendingChange(key, value, None, ("Сначала выберите пресет",))
         if not isinstance(value, (tuple, list)) or len(value) != 3:
             return PendingChange(key, value, None, ("Нужны три веса",))
         numbers = tuple(_numeric_input(v) for v in value)
@@ -453,7 +455,7 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
             return PendingChange(key, value, None, ("Веса должны быть конечными и неотрицательными",))
         if abs(sum(numbers) - 100) > 1e-7:
             return PendingChange(key, value, None, ("Сумма весов должна быть 100%",))
-        updated = replace(fitness, weights=tuple(v / 100 for v in numbers))
+        updated = replace(fitness, preset="custom", weights=tuple(v / 100 for v in numbers))
     elif key == "normalization_mode":
         if value not in ("auto", "manual"):
             return PendingChange(key, value, None, ("Неизвестный режим нормализации",))
@@ -480,6 +482,24 @@ def propose_fitness_change(state: UIState, key: str, value: object) -> PendingCh
     candidate = replace(state.config, fitness=updated)
     errors = validate_config(candidate).errors
     return PendingChange(key, value, candidate if not errors else None, errors)
+
+
+def rebalance_weight_percent(weights: tuple[float, float, float], index: int,
+                             value: float) -> tuple[float, float, float]:
+    """Изменить один вес, сохранив сумму 100% и пропорцию двух остальных."""
+
+    if index not in (0, 1, 2) or not isfinite(value) or not 0 <= value <= 100:
+        raise ValueError("Недопустимый вес")
+    others = [i for i in range(3) if i != index]
+    remainder = 100 - value
+    other_total = weights[others[0]] + weights[others[1]]
+    first = (round(remainder * weights[others[0]] / other_total, 2)
+             if other_total else round(remainder / 2, 2))
+    result = list(weights)
+    result[index] = value
+    result[others[0]] = first
+    result[others[1]] = round(remainder - first, 2)
+    return tuple(result)
 
 
 def propose_settings_reset(state: UIState) -> PendingChange:
@@ -529,7 +549,7 @@ def build_penalty_controls(state: UIState, submit: SubmitChange) -> None:
 def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
     """Показать пресеты и веса без выдуманных значений для открытых решений."""
 
-    with ui.expansion("Параметры Fitness-функции", value=True).classes("w-full"):
+    with ui.expansion("Параметры Fitness-функции", value=False).classes("w-full"):
         error_label = ui.label("").classes("setting-error")
         details = None
         easy_details = None
@@ -539,25 +559,36 @@ def build_fitness_controls(state: UIState, submit: SubmitChange) -> None:
             details.clear()
             fitness = state.config.fitness
             with details:
-                if fitness.preset in PRESET_WEIGHTS:
-                    t, length, complexity = fitness.weights
-                    ui.label(f"Веса T/L/C: {t*100:g}/{length*100:g}/{complexity*100:g}%").classes("panel-copy")
-                elif fitness.preset == "custom":
+                if fitness.preset in PRESET_WEIGHTS or fitness.preset == "custom":
                     draft = [v * 100 for v in fitness.weights] if fitness.weights else [None] * 3
 
                     def change_weight(index: int, value: object) -> None:
-                        draft[index] = value
+                        number = _numeric_input(value)
+                        if number is None or not 0 <= number <= 100:
+                            error_label.set_text("Вес должен быть от 0 до 100%")
+                            return
+                        number = round(number, 2)
+                        if all(v is not None for v in draft):
+                            candidate = rebalance_weight_percent(tuple(draft), index, number)
+                            draft[:] = candidate
+                        else:
+                            draft[index] = number
                         if any(v is None for v in draft):
                             error_label.set_text("Заполните все три веса; сумма должна быть 100%")
                             return
                         pending = propose_fitness_change(state, "weights", tuple(draft))
                         error_label.set_text("; ".join(pending.errors))
                         if not pending.errors:
-                            submit(pending, render_weights, lambda: None)
+                            submit(pending, render_weights, sync_preset_and_weights)
 
                     for index, name in enumerate(("Время T", "Длина L", "Сложность C")):
-                        _setting_pair(name + ", %", draft[index], 0, 100, 1,
+                        _setting_pair(name + ", %", draft[index], 0, 100, 0.1,
                                       lambda value, i=index: change_weight(i, value))
+
+        def sync_preset_and_weights() -> None:
+            if preset_select.value != state.config.fitness.preset:
+                preset_select.set_value(state.config.fitness.preset)
+            render_weights()
 
         def select_preset(value: object) -> None:
             if value == state.config.fitness.preset:

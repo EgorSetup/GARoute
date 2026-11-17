@@ -1,9 +1,12 @@
 """Изменение настроек ГА без зависимости от браузерных виджетов."""
 
+import pytest
+
 from interface.controls import (
     UIState,
     apply_setting_change,
     propose_fitness_change,
+    rebalance_weight_percent,
     propose_setting_change,
     propose_penalty_change,
     propose_settings_reset,
@@ -85,11 +88,17 @@ def test_bad_input_does_not_change_state() -> None:
     assert state.config.ga.elite_count == 2
 
 
-def test_preset_locks_weights() -> None:
+def test_preset_weights_and_custom_transition() -> None:
     state = UIState()
     assert apply_setting_change(state, propose_fitness_change(state, "preset", "fast"))
     assert state.config.fitness.weights == (1.0, 0.0, 0.0)
     assert propose_fitness_change(state, "weight_time", 40).errors
+    edited = rebalance_weight_percent((100, 0, 0), 0, 80)
+    assert edited == (80, 10, 10)
+    assert apply_setting_change(state, propose_fitness_change(state, "weights", edited))
+    assert state.config.fitness.preset == "custom"
+    assert state.config.fitness.weights == (0.8, 0.1, 0.1)
+    assert state.custom_weights == state.config.fitness.weights
     assert apply_setting_change(state, propose_fitness_change(state, "preset", "easy"))
     assert state.config.fitness.weights == (0.15, 0.10, 0.75)
     assert state.config.fitness.easy_length_delta == 0.5
@@ -100,6 +109,13 @@ def test_preset_locks_weights() -> None:
     assert state.config.fitness.weights == (0.2, 0.3, 0.5)
     assert propose_fitness_change(state, "weights", (20, 30, 40)).errors
     assert state.config.fitness.weights == (0.2, 0.3, 0.5)
+
+
+def test_weight_rebalance_preserves_other_ratio() -> None:
+    adjusted = rebalance_weight_percent((15, 10, 75), 0, 20)
+    assert adjusted[0] == 20
+    assert sum(adjusted) == pytest.approx(100)
+    assert adjusted[1] / adjusted[2] == pytest.approx(10 / 75, abs=1e-4)
 
 
 def test_switch_preset_refreshes_p0_card_without_clearing_population() -> None:

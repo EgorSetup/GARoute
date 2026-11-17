@@ -77,6 +77,23 @@ def test_preset_keeps_results() -> None:
     assert len(state.run_results) == 1
 
 
+def test_editing_fixed_preset_weights_requires_confirmation_with_results() -> None:
+    state = fixture_state()
+    request_condition_change(state, propose_fitness_change(state, "preset", "fast"))
+    proposal = propose_fitness_change(state, "weights", (80, 10, 10))
+    request_condition_change(state, proposal)
+    assert state.pending_change is proposal
+    assert state.config.fitness.preset == "fast"
+    cancel_change(state)
+    assert state.config.fitness.preset == "fast"
+    assert len(state.run_results) == 1
+    request_condition_change(state, proposal)
+    confirm_change(state)
+    assert state.config.fitness.preset == "custom"
+    assert state.config.fitness.weights == (0.8, 0.1, 0.1)
+    assert state.run_results == []
+
+
 def test_display_change_keeps_results() -> None:
     state = fixture_state()
     change = propose_display_change(state, "playback_speed", 1.5)
