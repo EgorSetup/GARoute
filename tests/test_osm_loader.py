@@ -21,16 +21,26 @@ def sample_graph() -> nx.MultiDiGraph:
 
 def test_area_expansion_is_explicit() -> None:
     area = GAROUTE_AREA
-    assert area.bbox == (30.355, 59.995, 30.415, 60.025)
+    assert area.bbox == (30.342574, 59.988787, 30.427426, 60.031213)
     assert area.network_type == "drive"
     expanded = area.expanded()
-    assert area.bbox == (30.355, 59.995, 30.415, 60.025)
+    assert area.bbox == (30.342574, 59.988787, 30.427426, 60.031213)
     assert expanded.west < area.west and expanded.east > area.east
     assert expanded.south < area.south and expanded.north > area.north
     geod = Geod(ellps="WGS84")
     assert geod.inv(area.west, area.north, expanded.west, area.north)[2] == pytest.approx(1000, abs=3)
     with pytest.raises(ValueError, match="WGS84"):
         AreaConfig(59.0, 60.0, 30.4, 30.3)
+
+
+def test_current_area_doubles_original_footprint_around_same_center() -> None:
+    original = AreaConfig(north=60.025, south=59.995, east=30.415, west=30.355)
+    current = GAROUTE_AREA
+    assert (current.north + current.south) / 2 == pytest.approx((original.north + original.south) / 2)
+    assert (current.east + current.west) / 2 == pytest.approx((original.east + original.west) / 2)
+    original_area = (original.north - original.south) * (original.east - original.west)
+    current_area = (current.north - current.south) * (current.east - current.west)
+    assert current_area / original_area == pytest.approx(2, rel=1e-4)
 
 
 def test_cache_metadata(monkeypatch, tmp_path) -> None:

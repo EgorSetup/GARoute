@@ -44,7 +44,8 @@ class AreaConfig:
         return AreaConfig(north, south, east, west, self.expansion_step_m, self.network_type)
 
 
-GAROUTE_AREA = AreaConfig(north=60.025, south=59.995, east=30.415, west=30.355)
+# 2026-11-18: площадь исходной области Q01 увеличена вдвое при том же центре.
+GAROUTE_AREA = AreaConfig(north=60.031213, south=59.988787, east=30.427426, west=30.342574)
 # Утверждённая область находится внутри Санкт-Петербурга; правило 10.2 ПДД
 # применимо только к явно распознанным обычным городским дорогам этой области.
 GAROUTE_URBAN_CONTEXT = True
